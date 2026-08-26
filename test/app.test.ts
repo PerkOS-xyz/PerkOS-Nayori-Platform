@@ -44,6 +44,23 @@ function makeApp(database: DatabaseHealth = new FakeDatabase()) {
 }
 
 describe("Nayori foundation API", () => {
+  it("refuses to start quote issuance without a wired quote service", () => {
+    const quoteConfig = loadConfig({
+      DATABASE_URL: "postgresql://nayori:test@localhost:5432/nayori_test",
+      NODE_ENV: "test",
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"configured":"outside-github"}',
+    });
+
+    expect(() =>
+      createApp({
+        config: quoteConfig,
+        database: new FakeDatabase(),
+        logger: new MemoryLogger(),
+      }),
+    ).toThrow(/quote service/i);
+  });
+
   it("returns liveness without touching PostgreSQL", async () => {
     const database = new FakeDatabase();
     const { app } = makeApp(database);
