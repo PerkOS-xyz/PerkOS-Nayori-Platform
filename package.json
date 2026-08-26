@@ -1,0 +1,39 @@
+{
+  "name": "@perkos/nayori-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private API and reconciliation platform for Nayori x402 payments on Stacks.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:production": "node dist/migrate.js",
+    "dev": "tsx watch src/server.ts",
+    "lint": "eslint .",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "hono": "4.13.5",
+    "pg": "8.23.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.3.0",
+    "@types/pg": "8.23.1",
+    "eslint": "10.9.1",
+    "globals": "17.11.0",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "4.1.11"
+  }
+}
