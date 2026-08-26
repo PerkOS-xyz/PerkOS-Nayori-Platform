@@ -12,19 +12,21 @@ describe("facilitator migrations", () => {
 
     expect(migrations.map((migration) => migration.filename)).toEqual([
       "001_facilitator_foundation.sql",
+      "002_merchant_quotes.sql",
     ]);
     expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("contains the replay, amount and append-only invariants", async () => {
-    const [migration] = await loadMigrationFiles(migrationsDirectory);
-    expect(migration).toBeDefined();
-    const sql = migration?.sql ?? "";
+    const migrations = await loadMigrationFiles(migrationsDirectory);
+    const sql = migrations.map((migration) => migration.sql).join("\n");
 
     expect(sql).toContain("quote_id varchar(64) NOT NULL UNIQUE");
     expect(sql).toContain("UNIQUE INDEX settlements_network_txid_unique");
     expect(sql).toContain("CHECK (amount_atomic > 0)");
     expect(sql).toContain("settlement_transitions_append_only");
+    expect(sql).toContain("merchants_route_config_v1");
+    expect(sql).toContain("quotes_max_lifetime");
     expect(sql).not.toMatch(/private[_ ]?key/i);
   });
 });

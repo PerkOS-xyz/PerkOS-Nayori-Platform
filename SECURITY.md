@@ -13,6 +13,8 @@ Do not test settlement behavior against mainnet, broadcast a transaction, access
 data or attempt persistence without explicit written authorization. Read-only reproduction and
 local/testnet fixtures are preferred.
 
-The current foundation release does not enable quote issuance, verification, settlement,
-sponsorship or resource delivery. Treat any accidental appearance of those capabilities as a
+The current release may enable authenticated, request-bound quote issuance with external Ed25519
+signing material. A quote is not proof of payment. Verification, broadcast, settlement,
+sponsorship and resource delivery remain unavailable; treat any accidental appearance of those
+capabilities, private JWK output, plaintext merchant credential or credential-bearing log as a
 release-blocking issue.

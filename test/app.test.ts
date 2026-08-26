@@ -44,6 +44,23 @@ function makeApp(database: DatabaseHealth = new FakeDatabase()) {
 }
 
 describe("Nayori foundation API", () => {
+  it("refuses to start quote issuance without a wired quote service", () => {
+    const quoteConfig = loadConfig({
+      DATABASE_URL: "postgresql://nayori:test@localhost:5432/nayori_test",
+      NODE_ENV: "test",
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"configured":"outside-github"}',
+    });
+
+    expect(() =>
+      createApp({
+        config: quoteConfig,
+        database: new FakeDatabase(),
+        logger: new MemoryLogger(),
+      }),
+    ).toThrow(/quote service/i);
+  });
+
   it("returns liveness without touching PostgreSQL", async () => {
     const database = new FakeDatabase();
     const { app } = makeApp(database);
@@ -58,7 +75,7 @@ describe("Nayori foundation API", () => {
     expect(await response.json()).toEqual({
       status: "ok",
       service: "nayori-x402-facilitator",
-      version: "0.1.0",
+      version: "0.2.0",
       release: "abc1234",
     });
     expect(database.pingCount).toBe(0);
@@ -102,6 +119,7 @@ describe("Nayori foundation API", () => {
       status: string;
       settlementEnabled: boolean;
       sponsorshipEnabled: boolean;
+      quoteIssuanceEnabled: boolean;
       networks: unknown[];
       mechanisms: unknown[];
     };
@@ -114,12 +132,14 @@ describe("Nayori foundation API", () => {
 
     expect(supported).toMatchObject({
       status: "foundation",
+      quoteIssuanceEnabled: false,
       settlementEnabled: false,
       sponsorshipEnabled: false,
       networks: [],
       mechanisms: [],
     });
     expect(openapi.paths).not.toHaveProperty("/v1/x402/settle");
+    expect(openapi.paths).not.toHaveProperty("/v1/quotes");
     expect(manifest.availability).toMatchObject({ quote: false, verify: false, settle: false });
   });
 

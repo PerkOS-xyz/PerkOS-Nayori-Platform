@@ -32,6 +32,7 @@ services:
       NODE_ENV: production
       RELEASE_SHA: local-compose
       SERVICE_ORIGIN: http://localhost:8080
+      QUOTE_ISSUANCE_ENABLED: "false"
       SETTLEMENT_ENABLED: "false"
       SPONSORSHIP_ENABLED: "false"
       STACKS_NETWORK: testnet
