@@ -58,7 +58,7 @@ describe("Nayori foundation API", () => {
     expect(await response.json()).toEqual({
       status: "ok",
       service: "nayori-x402-facilitator",
-      version: "0.1.0",
+      version: "0.2.0",
       release: "abc1234",
     });
     expect(database.pingCount).toBe(0);
@@ -102,6 +102,7 @@ describe("Nayori foundation API", () => {
       status: string;
       settlementEnabled: boolean;
       sponsorshipEnabled: boolean;
+      quoteIssuanceEnabled: boolean;
       networks: unknown[];
       mechanisms: unknown[];
     };
@@ -114,12 +115,14 @@ describe("Nayori foundation API", () => {
 
     expect(supported).toMatchObject({
       status: "foundation",
+      quoteIssuanceEnabled: false,
       settlementEnabled: false,
       sponsorshipEnabled: false,
       networks: [],
       mechanisms: [],
     });
     expect(openapi.paths).not.toHaveProperty("/v1/x402/settle");
+    expect(openapi.paths).not.toHaveProperty("/v1/quotes");
     expect(manifest.availability).toMatchObject({ quote: false, verify: false, settle: false });
   });
 

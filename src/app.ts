@@ -15,6 +15,7 @@ import {
   SERVICE_VERSION,
 } from "./documents.js";
 import type { AppLogger } from "./logger.js";
+import { QuoteServiceError, type QuoteService } from "./quotes.js";
 
 type AppVariables = {
   requestId: string;
@@ -24,6 +25,7 @@ export type CreateAppOptions = {
   readonly config: AppConfig;
   readonly database: DatabaseHealth;
   readonly logger: AppLogger;
+  readonly quoteService?: QuoteService;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -33,7 +35,10 @@ function errorBody(code: string, message: string, requestId: string) {
 }
 
 export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVariables }> {
-  const { config, database, logger } = options;
+  const { config, database, logger, quoteService } = options;
+  if (config.quoteIssuanceEnabled && !quoteService) {
+    throw new Error("Quote issuance is enabled without a quote service.");
+  }
   const app = new Hono<{ Variables: AppVariables }>();
 
   app.use("*", async (context, next) => {
@@ -130,6 +135,43 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
   app.get("/.well-known/agent.json", (context) => context.json(createAgentDocument(config)));
   app.get("/openapi.json", (context) => context.json(createOpenApiDocument(config)));
   app.get("/llms.txt", (context) => context.text(createLlmsText(config)));
+
+  if (config.quoteIssuanceEnabled && quoteService) {
+    app.get("/.well-known/jwks.json", (context) => context.json(quoteService.publicJwks));
+    app.post("/v1/quotes", async (context) => {
+      let input: unknown;
+      try {
+        input = await context.req.json();
+      } catch {
+        return context.json(
+          errorBody("invalid_request", "The quote request must be valid JSON.", context.get("requestId")),
+          400,
+        );
+      }
+
+      try {
+        const issued = await quoteService.issue(context.req.header("authorization"), input);
+        logger.info({
+          event: "quote_issued",
+          requestId: context.get("requestId"),
+          merchantId: issued.merchantId,
+          routeId: issued.routeId,
+          quoteId: issued.quoteId,
+        });
+        return context.json(issued.response, 201);
+      } catch (error) {
+        if (!(error instanceof QuoteServiceError)) throw error;
+        if (error.status === 401) context.header("www-authenticate", 'Bearer realm="nayori-quotes"');
+        if (error.status === 429 && error.retryAfterSeconds) {
+          context.header("retry-after", String(error.retryAfterSeconds));
+        }
+        return context.json(
+          errorBody(error.code, error.publicMessage, context.get("requestId")),
+          error.status,
+        );
+      }
+    });
+  }
 
   app.notFound((context) =>
     context.json(

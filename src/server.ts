@@ -4,10 +4,15 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { PostgresDatabase } from "./database.js";
 import { consoleLogger } from "./logger.js";
+import { createQuoteSigner } from "./quote-signing.js";
+import { createQuoteService } from "./quotes.js";
 
 const config = loadConfig();
 const database = new PostgresDatabase(config);
-const app = createApp({ config, database, logger: consoleLogger });
+const quoteService = config.quoteIssuanceEnabled
+  ? createQuoteService({ config, store: database, signer: await createQuoteSigner(config) })
+  : undefined;
+const app = createApp({ config, database, logger: consoleLogger, quoteService });
 
 const server = serve(
   {
@@ -21,6 +26,7 @@ const server = serve(
       address: info.address,
       port: info.port,
       release: config.releaseSha,
+      quoteIssuanceEnabled: config.quoteIssuanceEnabled,
       settlementEnabled: config.settlementEnabled,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });

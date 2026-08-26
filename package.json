@@ -1,6 +1,6 @@
 {
   "name": "@perkos/nayori-platform",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Private API and reconciliation platform for Nayori x402 payments on Stacks.",
   "type": "module",
@@ -13,6 +13,9 @@
     "db:migrate:production": "node dist/migrate.js",
     "dev": "tsx watch src/server.ts",
     "lint": "eslint .",
+    "merchant:provision": "tsx src/provision-merchant.ts",
+    "merchant:provision:production": "node dist/provision-merchant.js",
+    "quote:keygen": "tsx src/generate-quote-key.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -21,7 +24,9 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
+    "@perkos/agent-sdk": "0.2.0",
     "hono": "4.13.5",
+    "jose": "6.2.10",
     "pg": "8.23.0",
     "zod": "4.4.3"
   },
