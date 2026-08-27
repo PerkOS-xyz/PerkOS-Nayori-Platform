@@ -36,8 +36,8 @@ const invitationTokenPattern = /^ny_pi_[A-Za-z0-9_-]{43}$/;
 const clientIdPattern = /^ny_oc_[A-Za-z0-9_-]{24}$/;
 const clientSecretPattern = /^ny_cs_[A-Za-z0-9_-]{43}$/;
 const challengeIdPattern = /^nc_[0-9a-f]{32}$/;
-const hexPublicKeyPattern = /^(02|03)[0-9a-f]{64}$/i;
-const rsvSignaturePattern = /^[0-9a-f]{130}$/i;
+const hexPublicKeyPattern = /^(?:0x)?(02|03)[0-9a-f]{64}$/i;
+const rsvSignaturePattern = /^(?:0x)?[0-9a-f]{130}$/i;
 
 const challengeRequestSchema = z
   .object({
@@ -195,6 +195,10 @@ function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+function normalizeHex(value: string): string {
+  return value.startsWith("0x") || value.startsWith("0X") ? value.slice(2) : value;
+}
+
 function safeDigestEqual(actual: string, expected: string): boolean {
   if (!/^[0-9a-f]{64}$/.test(actual) || !/^[0-9a-f]{64}$/.test(expected)) return false;
   return timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
@@ -334,11 +338,13 @@ export function createOAuthService(options: {
       let walletAddress: string;
       let signatureValid = false;
       try {
-        walletAddress = publicKeyToAddressSingleSig(parsed.data.publicKey, config.stacksNetwork);
+        const publicKey = normalizeHex(parsed.data.publicKey);
+        const signature = normalizeHex(parsed.data.signature);
+        walletAddress = publicKeyToAddressSingleSig(publicKey, config.stacksNetwork);
         signatureValid = verifyMessageSignatureRsv({
           message: challenge.message,
-          publicKey: parsed.data.publicKey,
-          signature: parsed.data.signature,
+          publicKey,
+          signature,
         });
       } catch {
         walletAddress = "";

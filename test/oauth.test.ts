@@ -150,7 +150,11 @@ async function registerWallet(service: Awaited<ReturnType<typeof context>>["serv
     messageHash: Buffer.from(hashMessage(challenge.message)).toString("hex"),
     privateKey,
   });
-  const client = await service.register({ challengeId: challenge.challengeId, signature, publicKey: publicKeyHex });
+  const client = await service.register({
+    challengeId: challenge.challengeId,
+    signature: `0x${signature}`,
+    publicKey: `0x${publicKeyHex}`,
+  });
   return { challenge, client, walletAddress, signature, publicKeyHex };
 }
 
