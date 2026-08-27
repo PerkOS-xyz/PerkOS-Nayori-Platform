@@ -11,9 +11,12 @@ import {
 import type { AppConfig } from "./config.js";
 import type { MerchantQuoteStore } from "./database.js";
 import {
-  hashMerchantApiKey,
+  MerchantAuthenticationError,
+  createApiKeyAuthenticator,
+  type MerchantAuthenticator,
+} from "./auth.js";
+import {
   hashMerchantRouteConfig,
-  parseBearerApiKey,
   quoteRequestSchema,
   resolveQuotePolicy,
 } from "./merchant.js";
@@ -76,24 +79,30 @@ export function createQuoteService(options: {
   readonly signer: QuoteSigner;
   readonly now?: () => number;
   readonly rateLimiter?: FixedWindowRateLimiter;
+  readonly authenticator?: MerchantAuthenticator;
 }): QuoteService {
   const { config, store, signer } = options;
   const now = options.now ?? (() => Date.now());
   const rateLimiter =
     options.rateLimiter ?? new FixedWindowRateLimiter(config.quoteRateLimitPerMinute, now);
+  const authenticator = options.authenticator ?? createApiKeyAuthenticator(store);
 
   return {
     publicJwks: signer.publicJwks,
     async issue(authorization, input) {
-      let apiKeyHash: string;
+      let merchant;
       try {
-        apiKeyHash = hashMerchantApiKey(parseBearerApiKey(authorization));
-      } catch {
+        merchant = await authenticator.authenticate(authorization, "quotes:create");
+      } catch (error) {
+        if (error instanceof MerchantAuthenticationError && error.code === "insufficient_scope") {
+          throw new QuoteServiceError(
+            "insufficient_scope",
+            "The bearer credential does not grant quotes:create.",
+            403,
+          );
+        }
         throw unauthorized();
       }
-
-      const merchant = await store.findActiveMerchantByApiKeyHash(apiKeyHash);
-      if (!merchant) throw unauthorized();
 
       const rate = rateLimiter.consume(merchant.merchantId);
       if (!rate.allowed) {

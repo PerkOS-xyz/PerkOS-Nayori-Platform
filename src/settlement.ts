@@ -12,6 +12,12 @@ import {
 import { z } from "zod";
 
 import type { TransactionBroadcaster } from "./broadcast.js";
+import {
+  MerchantAuthenticationError,
+  createApiKeyAuthenticator,
+  type MerchantAuthenticator,
+  type OAuthScope,
+} from "./auth.js";
 import type { AppConfig } from "./config.js";
 import {
   SettlementStoreError,
@@ -23,7 +29,7 @@ import {
   type SettlementStore,
   type StoredQuoteRecord,
 } from "./database.js";
-import { hashMerchantApiKey, parseBearerApiKey, type MerchantRecord } from "./merchant.js";
+import type { MerchantRecord } from "./merchant.js";
 import type { QuoteSigner, VerifiedQuoteToken } from "./quote-signing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 
@@ -52,7 +58,7 @@ const paymentRequestSchema = z
   .strict();
 
 type PaymentRequest = z.infer<typeof paymentRequestSchema>;
-type SettlementErrorStatus = 400 | 401 | 404 | 409 | 422 | 429;
+type SettlementErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429;
 
 export class SettlementServiceError extends Error {
   constructor(
@@ -234,6 +240,7 @@ export function createSettlementService(options: {
   readonly now?: () => number;
   readonly rateLimiter?: FixedWindowRateLimiter;
   readonly deliveryStore?: DeliveryLedgerStore;
+  readonly authenticator?: MerchantAuthenticator;
 }): SettlementService {
   const { config, store, signer, broadcaster, deliveryStore } = options;
   if (config.settlementEnabled && !broadcaster) {
@@ -246,16 +253,25 @@ export function createSettlementService(options: {
   const now = options.now ?? (() => Date.now());
   const rateLimiter =
     options.rateLimiter ?? new FixedWindowRateLimiter(config.paymentRateLimitPerMinute, now);
+  const authenticator = options.authenticator ?? createApiKeyAuthenticator(store);
 
-  async function authenticate(authorization: string | undefined): Promise<MerchantRecord> {
-    let apiKeyHash: string;
+  async function authenticate(
+    authorization: string | undefined,
+    requiredScope: OAuthScope,
+  ): Promise<MerchantRecord> {
+    let merchant: MerchantRecord;
     try {
-      apiKeyHash = hashMerchantApiKey(parseBearerApiKey(authorization));
-    } catch {
+      merchant = await authenticator.authenticate(authorization, requiredScope);
+    } catch (error) {
+      if (error instanceof MerchantAuthenticationError && error.code === "insufficient_scope") {
+        throw new SettlementServiceError(
+          "insufficient_scope",
+          `The bearer credential does not grant ${requiredScope}.`,
+          403,
+        );
+      }
       throw unauthorized();
     }
-    const merchant = await store.findActiveMerchantByApiKeyHash(apiKeyHash);
-    if (!merchant) throw unauthorized();
     const rate = rateLimiter.consume(merchant.merchantId);
     if (!rate.allowed) {
       throw new SettlementServiceError(
@@ -272,8 +288,9 @@ export function createSettlementService(options: {
     authorization: string | undefined,
     input: unknown,
     allowReserved = false,
+    requiredScope: OAuthScope = "payments:verify",
   ): Promise<ValidatedPayment> {
-    const merchant = await authenticate(authorization);
+    const merchant = await authenticate(authorization, requiredScope);
     const parsed = paymentRequestSchema.safeParse(input);
     if (!parsed.success) {
       throw new SettlementServiceError("invalid_request", "The payment request is invalid.", 400);
@@ -379,7 +396,7 @@ export function createSettlementService(options: {
       if (!broadcaster) {
         throw new Error("Settlement is not enabled.");
       }
-      const validated = await validate(authorization, input, true);
+      const validated = await validate(authorization, input, true, "payments:settle");
       let reservation;
       try {
         reservation = await store.reserveSettlement({
@@ -441,7 +458,7 @@ export function createSettlementService(options: {
     },
 
     async get(authorization, settlementId) {
-      const merchant = await authenticate(authorization);
+      const merchant = await authenticate(authorization, "payments:read");
       if (!settlementIdSchema.safeParse(settlementId).success) {
         throw new SettlementServiceError("settlement_not_found", "Settlement not found.", 404);
       }
@@ -453,7 +470,7 @@ export function createSettlementService(options: {
     },
 
     async claimDelivery(authorization, settlementId) {
-      const merchant = await authenticate(authorization);
+      const merchant = await authenticate(authorization, "payments:read");
       if (!deliveryStore || !config.deliveryLedgerEnabled) {
         throw new Error("The delivery ledger is not enabled.");
       }
@@ -488,7 +505,7 @@ export function createSettlementService(options: {
     },
 
     async completeDelivery(authorization, settlementId, responseDigest) {
-      const merchant = await authenticate(authorization);
+      const merchant = await authenticate(authorization, "payments:settle");
       if (!deliveryStore || !config.deliveryLedgerEnabled) {
         throw new Error("The delivery ledger is not enabled.");
       }

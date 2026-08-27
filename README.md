@@ -5,10 +5,11 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at the **testnet confirmation and delivery-ledger boundary**. It provides
-merchant authentication, request-bound quotes, the pinned SDK verifier, durable reservation, one
-Stacks testnet broadcast attempt, leased reconciliation, canonical confirmation-depth checks and
-signed settlement receipts.
+This repository is at the **invite-only partner pilot and testnet settlement boundary**. It
+provides wallet-linked OAuth enrollment, backward-compatible merchant API keys, a scoped MCP
+endpoint, request-bound quotes, the pinned SDK verifier, durable reservation, one Stacks testnet
+broadcast attempt, leased reconciliation, canonical confirmation-depth checks and signed
+settlement receipts.
 
 All write capabilities remain disabled by default. `broadcast` and `pending` are unconfirmed and
 cannot create a receipt or delivery record. Once confirmed, the merchant resource server uses a
@@ -43,6 +44,15 @@ database is dedicated to Nayori and must not reuse another PerkOS product databa
 | `GET /.well-known/jwks.json` | Public Ed25519 quote-verification keys when issuance is enabled |
 | `GET /llms.txt` | Agent-readable usage and safety guidance |
 | `GET /openapi.json` | OpenAPI document containing only implemented routes |
+| `GET /.well-known/oauth-authorization-server` | OAuth authorization-server metadata (RFC 8414) |
+| `GET /.well-known/oauth-protected-resource` | OAuth protected-resource metadata (RFC 9728) |
+| `GET /oauth/jwks.json` | Public Ed25519 access-token verification keys |
+| `GET /auth.md` | Agent-readable authentication and wallet-signing boundary |
+| `POST /oauth/token` | `client_credentials` tokens using `client_secret_basic` |
+| `POST /v1/partners/challenges` | Creates an invitation-bound Leather signing challenge |
+| `POST /v1/partners/register` | Consumes the signed challenge and returns client credentials once |
+| `GET /.well-known/mcp/server-card.json` | Experimental MCP server card |
+| `POST /mcp` | Authenticated Streamable HTTP JSON-RPC with implemented Nayori tools |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
 | `POST /v1/x402/verify` | Authenticated verify-only check; never broadcasts |
 | `POST /v1/x402/settle` | Reserves and broadcasts once on testnet; returns unconfirmed state |
@@ -54,6 +64,10 @@ Quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. Verify is
 `PAYMENT_VERIFICATION_ENABLED=true`; settle and status are absent unless
 `SETTLEMENT_ENABLED=true`; delivery routes are absent unless `DELIVERY_LEDGER_ENABLED=true`. No
 placeholder capability is advertised.
+
+OAuth, partner registration and MCP are independently fail-closed. OAuth authorizes API access;
+it cannot sign a payment. Every STX, sBTC or USDCx transfer remains a separate wallet-approved
+transaction.
 
 ## Requirements
 
@@ -118,6 +132,12 @@ See [`.env.example`](.env.example). Important fail-closed settings:
   worker load and crash recovery.
 - `DELIVERY_LEDGER_ENABLED=true` requires reconciliation. `DELIVERY_RETRY_TTL_SECONDS` limits how
   long an unclaimed confirmed delivery remains claimable.
+- `OAUTH_ENABLED=true` requires a dedicated Ed25519 private JWK that is not reused for quote
+  signing. Access tokens last 60–900 seconds.
+- `PARTNER_REGISTRATION_ENABLED=true` requires OAuth and exposes only invitation-bound enrollment.
+  Challenges expire after 60–600 seconds and are consumed atomically with the invitation.
+- `MCP_ENABLED=true` requires OAuth. The endpoint checks `mcp:invoke`, while quote and settlement
+  tools also enforce their own downstream scopes and merchant isolation.
 - `SPONSORSHIP_ENABLED` accepts only `false` or `0` in this release.
 - `DATABASE_URL` must use `postgres://` or `postgresql://`.
 - `SERVICE_ORIGIN` controls canonical discovery URLs.
@@ -147,6 +167,32 @@ prints the new `ny_mk_` API key once. Store that key in the merchant secret mana
 configuration fixes method, path prefix, audience, network, asset, amount, recipient and TTL on
 the server, so the quote request cannot redirect funds or change price.
 
+## Invite-only partner OAuth pilot
+
+Generate a distinct OAuth signing key outside GitHub:
+
+```bash
+npm run oauth:keygen
+```
+
+After migrations and merchant provisioning, create a single-use invitation by setting
+`PARTNER_MERCHANT_ID`, `PARTNER_SCOPES`, `PARTNER_INVITATION_TTL_SECONDS` and the normal database
+configuration, then run:
+
+```bash
+npm run partner:invite
+```
+
+The invitation token is printed once and must travel through a private channel. The partner asks
+for a challenge, signs the exact returned plaintext in Leather, and submits the signature plus
+public key. Nayori derives the configured-network Stacks address, requires an exact match to the
+invited wallet and atomically consumes both records. The returned client secret is stored only as
+a SHA-256 digest and is never returned again.
+
+Tokens use `client_credentials` with `client_secret_basic`. Supported scopes are
+`catalog:read`, `quotes:create`, `payments:verify`, `payments:settle`, `payments:read` and
+`mcp:invoke`.
+
 ## Persistence invariants
 
 Migrations establish:
@@ -164,6 +210,8 @@ Migrations establish:
 - migration checksums protected by a PostgreSQL advisory lock;
 - versioned merchant route configuration, active-credential lookup and a five-minute database
   ceiling on quote lifetime.
+- single-use partner invitation and wallet challenge consumption;
+- wallet-linked, merchant-isolated OAuth clients with digested secrets and explicit scopes.
 
 The schema and quote issuer support STX, sBTC and USDCx profiles without enabling settlement.
 
@@ -188,22 +236,26 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
 - The delivery ledger makes retries idempotent by delivery ID, but the merchant resource server must
   enforce that key around its own external side effects.
 - Mainnet, transaction sponsorship and automatic resource proxying remain unavailable.
+- MCP Server Cards remain an experimental ecosystem extension; the card truthfully advertises
+  only the implemented Streamable HTTP tools.
 
 ## Planned PR sequence
 
 1. Foundation: truthful discovery, PostgreSQL, migration runner, Docker and CI — complete.
 2. Merchant authentication and signed, short-lived request quotes — complete.
 3. Pinned SDK verifier, durable reservation and testnet broadcast — complete.
-4. Reconciliation worker, confirmation receipts and delivery ledger — this release.
-5. SDK 0.3 paying flow and Platform verifier pin — this release; external clean-room remains a
+4. Reconciliation worker, confirmation receipts and delivery ledger — complete.
+5. SDK 0.3 paying flow and Platform verifier pin — complete; external clean-room remains a
    separate adoption gate.
-6. Isolated sponsor relay only after the non-sponsored path passes review.
+6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — this release.
+7. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
 [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)
 and [`docs/plans/2026-08-27-testnet-settlement-design.md`](docs/plans/2026-08-27-testnet-settlement-design.md)
 and [`docs/plans/2026-08-27-reconciliation-receipts-delivery-design.md`](docs/plans/2026-08-27-reconciliation-receipts-delivery-design.md)
 and [`docs/plans/2026-08-27-sdk-0.3-isolated-e2e-gate-design.md`](docs/plans/2026-08-27-sdk-0.3-isolated-e2e-gate-design.md)
+and [`docs/plans/2026-08-27-partner-pilot-oauth-mcp-design.md`](docs/plans/2026-08-27-partner-pilot-oauth-mcp-design.md)
 for the approved designs and security boundaries.
 
 ## Milestone 2 alignment

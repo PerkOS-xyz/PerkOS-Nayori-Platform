@@ -163,6 +163,51 @@ export interface MerchantQuoteStore {
   insertIssuedQuote(record: IssuedQuoteRecord): Promise<void>;
 }
 
+export type PartnerInvitationRecord = {
+  readonly invitationId: string;
+  readonly merchantId: string;
+  readonly scopes: readonly string[];
+  readonly expiresAt: Date;
+};
+
+export type WalletAuthChallengeRecord = PartnerInvitationRecord & {
+  readonly challengeId: string;
+  readonly walletAddress: string;
+  readonly network: "testnet" | "mainnet";
+  readonly message: string;
+  readonly challengeExpiresAt: Date;
+};
+
+export type OAuthClientRecord = {
+  readonly clientId: string;
+  readonly merchantId: string;
+  readonly walletAddress: string;
+  readonly secretDigest: string;
+  readonly scopes: readonly string[];
+};
+
+export interface PartnerAuthStore {
+  findActiveMerchantById(merchantId: string): Promise<MerchantRecord | null>;
+  findActivePartnerInvitation(tokenDigest: string, now: Date): Promise<PartnerInvitationRecord | null>;
+  insertWalletAuthChallenge(input: WalletAuthChallengeRecord): Promise<void>;
+  findActiveWalletAuthChallenge(
+    challengeId: string,
+    now: Date,
+  ): Promise<WalletAuthChallengeRecord | null>;
+  consumeChallengeAndCreateOAuthClient(input: {
+    readonly challengeId: string;
+    readonly clientId: string;
+    readonly secretDigest: string;
+    readonly usedAt: Date;
+  }): Promise<OAuthClientRecord | null>;
+  findActiveOAuthClient(clientId: string): Promise<OAuthClientRecord | null>;
+  recordOAuthTokenIssued(clientId: string, issuedAt: Date): Promise<void>;
+}
+
+export interface PartnerInvitationProvisioningStore {
+  insertPartnerInvitation(input: PartnerInvitationRecord & { readonly tokenDigest: string }): Promise<void>;
+}
+
 export interface SettlementStore {
   findStoredQuote(quoteId: string, merchantId: string): Promise<StoredQuoteRecord | null>;
   reserveSettlement(input: SettlementReservation): Promise<ReserveSettlementResult>;
@@ -225,6 +270,8 @@ export class PostgresDatabase
     DatabaseHealth,
     MerchantQuoteStore,
     MerchantProvisioningStore,
+    PartnerAuthStore,
+    PartnerInvitationProvisioningStore,
     SettlementStore,
     ReconciliationStore,
     DeliveryLedgerStore
@@ -259,6 +306,23 @@ export class PostgresDatabase
        WHERE api_key_hash = $1 AND status = 'active'
        LIMIT 1`,
       [apiKeyHash],
+    );
+    const row = result.rows[0] as unknown;
+    return row ? parseMerchantRecord(row) : null;
+  }
+
+  async findActiveMerchantById(merchantId: string): Promise<MerchantRecord | null> {
+    const result = await this.#pool.query(
+      `SELECT
+         merchant_id AS "merchantId",
+         allowed_origins AS "allowedOrigins",
+         allowed_audiences AS "allowedAudiences",
+         recipient_allowlist AS "recipientAllowlist",
+         route_config AS "routeConfig"
+       FROM merchants
+       WHERE merchant_id = $1 AND status = 'active'
+       LIMIT 1`,
+      [merchantId],
     );
     const row = result.rows[0] as unknown;
     return row ? parseMerchantRecord(row) : null;
@@ -774,6 +838,152 @@ export class PostgresDatabase
         JSON.stringify(input.recipientAllowlist),
         JSON.stringify(input.routeConfig),
       ],
+    );
+  }
+
+  async insertPartnerInvitation(
+    input: PartnerInvitationRecord & { readonly tokenDigest: string },
+  ): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO partner_invitations (
+         invitation_id, merchant_id, token_digest, scopes, expires_at
+       ) VALUES ($1, $2, $3, $4, $5)`,
+      [input.invitationId, input.merchantId, input.tokenDigest, input.scopes, input.expiresAt],
+    );
+  }
+
+  async findActivePartnerInvitation(
+    tokenDigest: string,
+    now: Date,
+  ): Promise<PartnerInvitationRecord | null> {
+    const result = await this.#pool.query(
+      `SELECT invitation_id AS "invitationId", merchant_id AS "merchantId", scopes,
+              expires_at AS "expiresAt"
+       FROM partner_invitations
+       WHERE token_digest = $1 AND used_at IS NULL AND expires_at >= $2
+       LIMIT 1`,
+      [tokenDigest, now],
+    );
+    return (result.rows[0] as PartnerInvitationRecord | undefined) ?? null;
+  }
+
+  async insertWalletAuthChallenge(input: WalletAuthChallengeRecord): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO wallet_auth_challenges (
+         challenge_id, invitation_id, merchant_id, wallet_address, network, message, expires_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        input.challengeId,
+        input.invitationId,
+        input.merchantId,
+        input.walletAddress,
+        input.network,
+        input.message,
+        input.challengeExpiresAt,
+      ],
+    );
+  }
+
+  async findActiveWalletAuthChallenge(
+    challengeId: string,
+    now: Date,
+  ): Promise<WalletAuthChallengeRecord | null> {
+    const result = await this.#pool.query(
+      `SELECT c.challenge_id AS "challengeId", c.invitation_id AS "invitationId",
+              c.merchant_id AS "merchantId", c.wallet_address AS "walletAddress",
+              c.network, c.message, c.expires_at AS "challengeExpiresAt",
+              i.scopes, i.expires_at AS "expiresAt"
+       FROM wallet_auth_challenges c
+       JOIN partner_invitations i ON i.invitation_id = c.invitation_id
+       JOIN merchants m ON m.merchant_id = c.merchant_id
+       WHERE c.challenge_id = $1
+         AND c.used_at IS NULL AND c.expires_at >= $2
+         AND i.used_at IS NULL AND i.expires_at >= $2
+         AND m.status = 'active'
+       LIMIT 1`,
+      [challengeId, now],
+    );
+    return (result.rows[0] as WalletAuthChallengeRecord | undefined) ?? null;
+  }
+
+  async consumeChallengeAndCreateOAuthClient(input: {
+    readonly challengeId: string;
+    readonly clientId: string;
+    readonly secretDigest: string;
+    readonly usedAt: Date;
+  }): Promise<OAuthClientRecord | null> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query<{
+        invitationId: string;
+        merchantId: string;
+        walletAddress: string;
+        scopes: string[];
+      }>(
+        `SELECT c.invitation_id AS "invitationId", c.merchant_id AS "merchantId",
+                c.wallet_address AS "walletAddress", i.scopes
+         FROM wallet_auth_challenges c
+         JOIN partner_invitations i ON i.invitation_id = c.invitation_id
+         JOIN merchants m ON m.merchant_id = c.merchant_id
+         WHERE c.challenge_id = $1
+           AND c.used_at IS NULL AND c.expires_at >= $2
+           AND i.used_at IS NULL AND i.expires_at >= $2
+           AND m.status = 'active'
+         FOR UPDATE OF c, i`,
+        [input.challengeId, input.usedAt],
+      );
+      const row = locked.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+      await client.query(`UPDATE wallet_auth_challenges SET used_at = $2 WHERE challenge_id = $1`, [
+        input.challengeId,
+        input.usedAt,
+      ]);
+      await client.query(`UPDATE partner_invitations SET used_at = $2 WHERE invitation_id = $1`, [
+        row.invitationId,
+        input.usedAt,
+      ]);
+      await client.query(
+        `INSERT INTO oauth_clients (
+           client_id, merchant_id, wallet_address, secret_digest, scopes
+         ) VALUES ($1, $2, $3, $4, $5)`,
+        [input.clientId, row.merchantId, row.walletAddress, input.secretDigest, row.scopes],
+      );
+      await client.query("COMMIT");
+      return {
+        clientId: input.clientId,
+        merchantId: row.merchantId,
+        walletAddress: row.walletAddress,
+        secretDigest: input.secretDigest,
+        scopes: row.scopes,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async findActiveOAuthClient(clientId: string): Promise<OAuthClientRecord | null> {
+    const result = await this.#pool.query(
+      `SELECT client_id AS "clientId", merchant_id AS "merchantId",
+              wallet_address AS "walletAddress", secret_digest AS "secretDigest", scopes
+       FROM oauth_clients
+       WHERE client_id = $1 AND status = 'active'
+       LIMIT 1`,
+      [clientId],
+    );
+    return (result.rows[0] as OAuthClientRecord | undefined) ?? null;
+  }
+
+  async recordOAuthTokenIssued(clientId: string, issuedAt: Date): Promise<void> {
+    await this.#pool.query(
+      `UPDATE oauth_clients SET last_token_at = $2 WHERE client_id = $1 AND status = 'active'`,
+      [clientId, issuedAt],
     );
   }
 

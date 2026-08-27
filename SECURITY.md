@@ -13,13 +13,17 @@ Do not test settlement behavior against mainnet, broadcast a transaction, access
 data or attempt persistence without explicit written authorization. Read-only reproduction and
 local/testnet fixtures are preferred.
 
-The current release may enable quote issuance, verify-only checks, one testnet broadcast attempt,
+The current release may enable invitation-bound wallet enrollment, OAuth client credentials, MCP,
+quote issuance, verify-only checks, one testnet broadcast attempt,
 leased reconciliation and signed receipts after canonical confirmation depth. A quote, successful
 verification, `broadcast` or `pending` state is not confirmed payment. The delivery ledger gives
 the merchant a stable idempotency key; it does not make an arbitrary external side effect
 exactly-once and does not authorize Nayori to proxy merchant URLs. Mainnet and sponsorship remain
 unavailable. Treat any private JWK output, plaintext merchant credential, transaction bytes at
-rest, receipt issued before confirmation or credential-bearing log as a release-blocking issue.
+rest, plaintext invitation or OAuth client secret after its one-time response, replayable wallet
+challenge, receipt issued before confirmation or credential-bearing log as a release-blocking
+issue. The OAuth signing key must remain separate from the quote-signing key, and OAuth must never
+be treated as authority to sign a wallet payment.
 
 The testnet worker does not blindly rebroadcast ambiguous submissions. After it signs a receipt at
 the configured canonical depth, this release does not continuously recheck or revoke that receipt

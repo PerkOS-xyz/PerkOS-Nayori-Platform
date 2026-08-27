@@ -8,6 +8,21 @@ const REQUIRED_ENVIRONMENT: NodeJS.ProcessEnv = {
 };
 
 describe("loadConfig", () => {
+  it("keeps OAuth, partner registration and MCP fail-closed", () => {
+    expect(() =>
+      loadConfig({
+        ...REQUIRED_ENVIRONMENT,
+        OAUTH_ENABLED: "true",
+      }),
+    ).toThrow(/OAUTH_SIGNING_PRIVATE_JWK_JSON/);
+    expect(() =>
+      loadConfig({
+        ...REQUIRED_ENVIRONMENT,
+        MCP_ENABLED: "true",
+      }),
+    ).toThrow(/requires OAuth/);
+  });
+
   it("uses fail-closed foundation defaults", () => {
     const config = loadConfig(REQUIRED_ENVIRONMENT);
 

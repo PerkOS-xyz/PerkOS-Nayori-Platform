@@ -5,6 +5,8 @@ import { createHiroTransactionBroadcaster } from "./broadcast.js";
 import { loadConfig } from "./config.js";
 import { PostgresDatabase } from "./database.js";
 import { consoleLogger } from "./logger.js";
+import { createMcpService } from "./mcp.js";
+import { createOAuthService, createOAuthSigner } from "./oauth.js";
 import { createQuoteSigner } from "./quote-signing.js";
 import { createQuoteService } from "./quotes.js";
 import { createSettlementService } from "./settlement.js";
@@ -12,8 +14,17 @@ import { createSettlementService } from "./settlement.js";
 const config = loadConfig();
 const database = new PostgresDatabase(config);
 const quoteSigner = config.quoteIssuanceEnabled ? await createQuoteSigner(config) : undefined;
+const oauthSigner = config.oauthEnabled ? await createOAuthSigner(config) : undefined;
+const oauthService = config.oauthEnabled
+  ? createOAuthService({ config, store: database, signer: oauthSigner! })
+  : undefined;
 const quoteService = config.quoteIssuanceEnabled
-  ? createQuoteService({ config, store: database, signer: quoteSigner! })
+  ? createQuoteService({
+      config,
+      store: database,
+      signer: quoteSigner!,
+      ...(oauthService ? { authenticator: oauthService } : {}),
+    })
   : undefined;
 const settlementService = config.paymentVerificationEnabled
   ? createSettlementService({
@@ -24,6 +35,15 @@ const settlementService = config.paymentVerificationEnabled
         ? { broadcaster: createHiroTransactionBroadcaster({ config }) }
         : {}),
       ...(config.deliveryLedgerEnabled ? { deliveryStore: database } : {}),
+      ...(oauthService ? { authenticator: oauthService } : {}),
+    })
+  : undefined;
+const mcpService = config.mcpEnabled
+  ? createMcpService({
+      config,
+      authenticator: oauthService!,
+      quoteService,
+      settlementService,
     })
   : undefined;
 const app = createApp({
@@ -32,6 +52,8 @@ const app = createApp({
   logger: consoleLogger,
   quoteService,
   settlementService,
+  oauthService,
+  mcpService,
 });
 
 const server = serve(
@@ -51,6 +73,9 @@ const server = serve(
       settlementEnabled: config.settlementEnabled,
       reconciliationEnabled: config.reconciliationEnabled,
       deliveryLedgerEnabled: config.deliveryLedgerEnabled,
+      oauthEnabled: config.oauthEnabled,
+      partnerRegistrationEnabled: config.partnerRegistrationEnabled,
+      mcpEnabled: config.mcpEnabled,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });
   },

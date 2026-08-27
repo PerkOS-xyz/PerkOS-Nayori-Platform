@@ -33,6 +33,9 @@ services:
       DELIVERY_LEDGER_ENABLED: "false"
       PAYMENT_RATE_LIMIT_PER_MINUTE: 60
       PAYMENT_VERIFICATION_ENABLED: "false"
+      OAUTH_ENABLED: "false"
+      PARTNER_REGISTRATION_ENABLED: "false"
+      MCP_ENABLED: "false"
       RELEASE_SHA: local-compose
       SERVICE_ORIGIN: http://localhost:8080
       QUOTE_ISSUANCE_ENABLED: "false"

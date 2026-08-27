@@ -15,6 +15,7 @@ describe("facilitator migrations", () => {
       "002_merchant_quotes.sql",
       "003_testnet_settlement.sql",
       "004_reconciliation_receipts_delivery.sql",
+      "005_partner_oauth.sql",
     ]);
     expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
