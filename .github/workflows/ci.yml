@@ -31,9 +31,11 @@ jobs:
       DATABASE_URL: postgresql://nayori_test:nayori_test@127.0.0.1:5432/nayori_test
       DATABASE_INTEGRATION: "true"
       NODE_ENV: test
+      DELIVERY_LEDGER_ENABLED: "false"
       PAYMENT_VERIFICATION_ENABLED: "false"
       QUOTE_ISSUANCE_ENABLED: "false"
       SERVICE_ORIGIN: http://localhost:8080
+      RECONCILIATION_ENABLED: "false"
       SETTLEMENT_ENABLED: "false"
       SPONSORSHIP_ENABLED: "false"
       STACKS_NETWORK: testnet

@@ -23,6 +23,7 @@ const settlementService = config.paymentVerificationEnabled
       ...(config.settlementEnabled
         ? { broadcaster: createHiroTransactionBroadcaster({ config }) }
         : {}),
+      ...(config.deliveryLedgerEnabled ? { deliveryStore: database } : {}),
     })
   : undefined;
 const app = createApp({
@@ -48,6 +49,8 @@ const server = serve(
       quoteIssuanceEnabled: config.quoteIssuanceEnabled,
       paymentVerificationEnabled: config.paymentVerificationEnabled,
       settlementEnabled: config.settlementEnabled,
+      reconciliationEnabled: config.reconciliationEnabled,
+      deliveryLedgerEnabled: config.deliveryLedgerEnabled,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });
   },

@@ -47,6 +47,7 @@ const environmentSchema = z
     STACKS_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
     STACKS_API_URL: httpUrlSchema.default("https://api.testnet.hiro.so"),
     STACKS_BROADCAST_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
+    STACKS_OBSERVATION_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
     QUOTE_ISSUANCE_ENABLED: booleanFlag,
     QUOTE_SIGNING_PRIVATE_JWK_JSON: z.string().min(1).optional(),
     QUOTE_PREVIOUS_PUBLIC_JWKS_JSON: z.string().min(1).default('{"keys":[]}'),
@@ -55,6 +56,13 @@ const environmentSchema = z
     PAYMENT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
     PAYMENT_VERIFICATION_ENABLED: booleanFlag,
     SETTLEMENT_ENABLED: booleanFlag,
+    RECONCILIATION_ENABLED: booleanFlag,
+    SETTLEMENT_MIN_CONFIRMATIONS: z.coerce.number().int().min(1).max(100).default(1),
+    RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
+    RECONCILIATION_INTERVAL_MS: z.coerce.number().int().min(1_000).max(300_000).default(5_000),
+    RECONCILIATION_LEASE_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
+    DELIVERY_LEDGER_ENABLED: booleanFlag,
+    DELIVERY_RETRY_TTL_SECONDS: z.coerce.number().int().min(300).max(604_800).default(86_400),
     SPONSORSHIP_ENABLED: disabledFeatureFlag,
   })
   .superRefine((value, context) => {
@@ -86,6 +94,20 @@ const environmentSchema = z
         message: "Settlement is restricted to Stacks testnet in this release.",
       });
     }
+    if (value.RECONCILIATION_ENABLED && !value.SETTLEMENT_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["RECONCILIATION_ENABLED"],
+        message: "Reconciliation requires testnet settlement.",
+      });
+    }
+    if (value.DELIVERY_LEDGER_ENABLED && !value.RECONCILIATION_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["DELIVERY_LEDGER_ENABLED"],
+        message: "The delivery ledger requires reconciliation.",
+      });
+    }
     if (
       value.SETTLEMENT_ENABLED &&
       value.NODE_ENV === "production" &&
@@ -114,6 +136,7 @@ export type AppConfig = {
   readonly stacksNetwork: "testnet" | "mainnet";
   readonly stacksApiUrl: string;
   readonly stacksBroadcastTimeoutMs: number;
+  readonly stacksObservationTimeoutMs: number;
   readonly quoteIssuanceEnabled: boolean;
   readonly quoteSigningPrivateJwkJson?: string;
   readonly quotePreviousPublicJwksJson: string;
@@ -122,6 +145,13 @@ export type AppConfig = {
   readonly paymentRateLimitPerMinute: number;
   readonly paymentVerificationEnabled: boolean;
   readonly settlementEnabled: boolean;
+  readonly reconciliationEnabled: boolean;
+  readonly settlementMinConfirmations: number;
+  readonly reconciliationBatchSize: number;
+  readonly reconciliationIntervalMs: number;
+  readonly reconciliationLeaseMs: number;
+  readonly deliveryLedgerEnabled: boolean;
+  readonly deliveryRetryTtlSeconds: number;
   readonly sponsorshipEnabled: false;
 };
 
@@ -143,6 +173,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     stacksNetwork: value.STACKS_NETWORK,
     stacksApiUrl: value.STACKS_API_URL.replace(/\/$/, ""),
     stacksBroadcastTimeoutMs: value.STACKS_BROADCAST_TIMEOUT_MS,
+    stacksObservationTimeoutMs: value.STACKS_OBSERVATION_TIMEOUT_MS,
     quoteIssuanceEnabled: value.QUOTE_ISSUANCE_ENABLED,
     quoteSigningPrivateJwkJson: value.QUOTE_SIGNING_PRIVATE_JWK_JSON,
     quotePreviousPublicJwksJson: value.QUOTE_PREVIOUS_PUBLIC_JWKS_JSON,
@@ -151,6 +182,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     paymentRateLimitPerMinute: value.PAYMENT_RATE_LIMIT_PER_MINUTE,
     paymentVerificationEnabled: value.PAYMENT_VERIFICATION_ENABLED,
     settlementEnabled: value.SETTLEMENT_ENABLED,
+    reconciliationEnabled: value.RECONCILIATION_ENABLED,
+    settlementMinConfirmations: value.SETTLEMENT_MIN_CONFIRMATIONS,
+    reconciliationBatchSize: value.RECONCILIATION_BATCH_SIZE,
+    reconciliationIntervalMs: value.RECONCILIATION_INTERVAL_MS,
+    reconciliationLeaseMs: value.RECONCILIATION_LEASE_MS,
+    deliveryLedgerEnabled: value.DELIVERY_LEDGER_ENABLED,
+    deliveryRetryTtlSeconds: value.DELIVERY_RETRY_TTL_SECONDS,
     sponsorshipEnabled: value.SPONSORSHIP_ENABLED,
   };
 }

@@ -42,6 +42,10 @@ Observations are applied only while the settlement remains in an active state. C
 terminal failure and delivery transitions are append-only. Re-running a batch returns the same
 receipt and cannot recreate delivery state.
 
+An ambiguous initial broadcast is observed but never blindly rebroadcast. After configured depth,
+this testnet increment stops sampling the confirmed settlement and does not revoke a receipt after
+a later deep reorganization. Mainnet enablement requires a separate finality and recovery review.
+
 ## Receipt
 
 On confirmation the service creates a deterministic receipt ID, signs a JWT with the existing
@@ -82,7 +86,7 @@ states that the merchant still owns resource delivery.
 
 ## Gates
 
-Tests cover v3 canonical-success parsing, txid mismatch, 404/pending, abort/drop, unknown status,
+Tests cover v3 canonical-success parsing, txid mismatch, 404/pending, abort/drop/problematic-skip,
 invalid block/tip, insufficient depth, API ambiguity, lease recovery, concurrent workers,
 deterministic receipt creation, merchant isolation, claim retry, completion retry and digest
 conflict. PostgreSQL 16 CI applies migrations twice. Lint, strict types, all tests, build and a

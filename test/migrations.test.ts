@@ -14,6 +14,7 @@ describe("facilitator migrations", () => {
       "001_facilitator_foundation.sql",
       "002_merchant_quotes.sql",
       "003_testnet_settlement.sql",
+      "004_reconciliation_receipts_delivery.sql",
     ]);
     expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -30,6 +31,9 @@ describe("facilitator migrations", () => {
     expect(sql).toContain("quotes_max_lifetime");
     expect(sql).toContain("settlements_verified_material");
     expect(sql).toContain("settlements_broadcast_timestamps");
+    expect(sql).toContain("settlement_receipts");
+    expect(sql).toContain("settlements_reconcile_ready_idx");
+    expect(sql).toContain("deliveries_deterministic_id");
     expect(sql).not.toMatch(/private[_ ]?key/i);
   });
 });

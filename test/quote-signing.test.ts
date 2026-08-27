@@ -73,6 +73,41 @@ describe("quote signing", () => {
     expect(signer.publicJwks.keys.map((key) => key.kid)).toEqual(["active", "previous"]);
   });
 
+  it("signs settlement receipts with a distinct protected type", async () => {
+    const active = await signingJwk("receipt-key");
+    const signer = await createQuoteSigner(
+      loadConfig({
+        DATABASE_URL: "postgresql://nayori:test@localhost:5432/nayori_test",
+        NODE_ENV: "test",
+        SERVICE_ORIGIN: "https://api.nayori.ai",
+        QUOTE_ISSUANCE_ENABLED: "true",
+        QUOTE_SIGNING_PRIVATE_JWK_JSON: JSON.stringify(active.privateJwk),
+      }),
+    );
+    const token = await signer.signReceipt({
+      merchantId: "merchant-1",
+      audience: "merchant:research",
+      receiptId: "nr_11111111111111111111111111111111",
+      issuedAt: 1_700_000_000,
+      receipt: { settlementId: "ns_11111111111111111111111111111111", txid: `0x${"a".repeat(64)}` },
+    });
+    const verified = await jwtVerify(token, createLocalJWKSet(signer.publicJwks), {
+      issuer: "https://api.nayori.ai",
+      audience: "merchant:research",
+      currentDate: new Date(1_700_000_010_000),
+    });
+
+    expect(decodeProtectedHeader(token)).toMatchObject({
+      typ: "nayori-settlement-receipt+jwt",
+      kid: "receipt-key",
+    });
+    expect(verified.payload).toMatchObject({
+      sub: "merchant-1",
+      jti: "nr_11111111111111111111111111111111",
+      receipt: { settlementId: "ns_11111111111111111111111111111111" },
+    });
+  });
+
   it("rejects duplicate IDs and private previous keys", async () => {
     const active = await signingJwk("duplicate");
     await expect(

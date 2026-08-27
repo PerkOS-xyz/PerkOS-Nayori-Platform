@@ -13,9 +13,15 @@ Do not test settlement behavior against mainnet, broadcast a transaction, access
 data or attempt persistence without explicit written authorization. Read-only reproduction and
 local/testnet fixtures are preferred.
 
-The current release may enable authenticated, request-bound quote issuance, verify-only checks and
-one testnet broadcast attempt after durable reservation. A quote, successful verification,
-`broadcast` state or `pending` state is not confirmed payment. Mainnet broadcast, reconciliation,
-confirmation, sponsorship and resource delivery remain unavailable. Treat any accidental
-appearance of those capabilities, private JWK output, plaintext merchant credential,
-transaction bytes at rest or credential-bearing log as a release-blocking issue.
+The current release may enable quote issuance, verify-only checks, one testnet broadcast attempt,
+leased reconciliation and signed receipts after canonical confirmation depth. A quote, successful
+verification, `broadcast` or `pending` state is not confirmed payment. The delivery ledger gives
+the merchant a stable idempotency key; it does not make an arbitrary external side effect
+exactly-once and does not authorize Nayori to proxy merchant URLs. Mainnet and sponsorship remain
+unavailable. Treat any private JWK output, plaintext merchant credential, transaction bytes at
+rest, receipt issued before confirmation or credential-bearing log as a release-blocking issue.
+
+The testnet worker does not blindly rebroadcast ambiguous submissions. After it signs a receipt at
+the configured canonical depth, this release does not continuously recheck or revoke that receipt
+for a later deep reorganization. Choose confirmation depth conservatively and treat mainnet support
+as blocked on a separate review of finality, reorganization handling and operational recovery.

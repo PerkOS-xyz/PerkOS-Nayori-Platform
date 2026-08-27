@@ -68,6 +68,13 @@ export type QuoteSigner = {
     readonly expiresAt: number;
     readonly quote: unknown;
   }): Promise<string>;
+  signReceipt(input: {
+    readonly merchantId: string;
+    readonly audience: string;
+    readonly receiptId: string;
+    readonly issuedAt: number;
+    readonly receipt: unknown;
+  }): Promise<string>;
   verify(token: string, nowSeconds?: number): Promise<VerifiedQuoteToken>;
 };
 
@@ -134,6 +141,20 @@ export async function createQuoteSigner(config: AppConfig): Promise<QuoteSigner>
         .setJti(input.quoteId)
         .setIssuedAt(input.issuedAt)
         .setExpirationTime(input.expiresAt)
+        .sign(privateKey);
+    },
+    async signReceipt(input) {
+      return new SignJWT({ receipt: input.receipt })
+        .setProtectedHeader({
+          alg: "EdDSA",
+          kid: privateJwk.kid,
+          typ: "nayori-settlement-receipt+jwt",
+        })
+        .setIssuer(config.serviceOrigin)
+        .setAudience(input.audience)
+        .setSubject(input.merchantId)
+        .setJti(input.receiptId)
+        .setIssuedAt(input.issuedAt)
         .sign(privateKey);
     },
     async verify(token, nowSeconds = Math.floor(Date.now() / 1_000)) {

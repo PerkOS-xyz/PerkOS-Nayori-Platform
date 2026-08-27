@@ -30,16 +30,19 @@ services:
       DATABASE_URL: postgresql://nayori:nayori-local-only@postgres:5432/nayori
       LOG_LEVEL: info
       NODE_ENV: production
+      DELIVERY_LEDGER_ENABLED: "false"
       PAYMENT_RATE_LIMIT_PER_MINUTE: 60
       PAYMENT_VERIFICATION_ENABLED: "false"
       RELEASE_SHA: local-compose
       SERVICE_ORIGIN: http://localhost:8080
       QUOTE_ISSUANCE_ENABLED: "false"
+      RECONCILIATION_ENABLED: "false"
       SETTLEMENT_ENABLED: "false"
       SPONSORSHIP_ENABLED: "false"
       STACKS_NETWORK: testnet
       STACKS_API_URL: https://api.testnet.hiro.so
       STACKS_BROADCAST_TIMEOUT_MS: 10000
+      STACKS_OBSERVATION_TIMEOUT_MS: 10000
     command: ["sh", "-c", "node dist/migrate.js && exec node dist/server.js"]
     depends_on:
       postgres:
