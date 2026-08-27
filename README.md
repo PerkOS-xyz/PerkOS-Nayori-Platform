@@ -142,7 +142,7 @@ documented in the design, and `DATABASE_URL`, then run:
 npm run merchant:provision
 ```
 
-The command validates every route through SDK 0.3.0, writes only a SHA-256 credential digest and
+The command validates every route through SDK 0.3.1, writes only a SHA-256 credential digest and
 prints the new `ny_mk_` API key once. Store that key in the merchant secret manager. Named route
 configuration fixes method, path prefix, audience, network, asset, amount, recipient and TTL on
 the server, so the quote request cannot redirect funds or change price.
@@ -171,9 +171,9 @@ The schema and quote issuer support STX, sBTC and USDCx profiles without enablin
 
 Transaction parsing and economic verification belong in the public
 [`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins exact
-release `0.3.0`; it does not copy the SDK implementation.
+release `0.3.1`; it does not copy the SDK implementation.
 
-SDK 0.3.0 owns quote canonicalization, asset definitions, x402 requirements, fingerprints, origin
+SDK 0.3.1 owns quote canonicalization, asset definitions, x402 requirements, fingerprints, origin
 signature validation and the pure `stacks-signed-tx-v1` verifier. This Platform release invokes
 that verifier, rejects sponsorship, compares the signed token to its issued database record and
 persists only normalized evidence and a raw-transaction digest before broadcasting.

@@ -76,7 +76,7 @@ describe.skipIf(!runIntegration)("PostgreSQL merchant quote store", () => {
         txid: `0x${"d".repeat(64)}`,
         payer: "ST2JXKMSH007NPYAQHKJPQMAQYAD90NQGTVJVQ02B",
         rawTxHash: "e".repeat(64),
-        verifierVersion: "@perkos/agent-sdk@0.3.0",
+        verifierVersion: "@perkos/agent-sdk@0.3.1",
         verifierChecksum: "f".repeat(64),
         expectedSignedTokenHash: "c".repeat(64),
       };
