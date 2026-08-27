@@ -3,7 +3,7 @@ import { STACKS_X402_NETWORKS } from "@perkos/agent-sdk";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.4.1";
+export const SERVICE_VERSION = "0.4.2";
 
 function serviceStatus(config: AppConfig) {
   if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";

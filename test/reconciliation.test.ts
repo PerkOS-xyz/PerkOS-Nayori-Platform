@@ -195,7 +195,7 @@ const candidate: ReconciliationCandidate = {
   txid: TXID,
   payer: "ST2JXKMSH007NPYAQHKJPQMAQYAD90NQGTVJVQ02B",
   rawTxHash: "d".repeat(64),
-  verifierVersion: "@perkos/agent-sdk@0.3.0",
+  verifierVersion: "@perkos/agent-sdk@0.3.1",
   verifierChecksum: "e".repeat(64),
   status: "broadcast",
   failureReason: null,
