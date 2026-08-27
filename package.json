@@ -1,6 +1,6 @@
 {
   "name": "@perkos/nayori-platform",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Private API and reconciliation platform for Nayori x402 payments on Stacks.",
   "type": "module",
@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
-    "@perkos/agent-sdk": "0.2.0",
+    "@perkos/agent-sdk": "0.3.0",
     "hono": "4.13.5",
     "jose": "6.2.10",
     "pg": "8.23.0",

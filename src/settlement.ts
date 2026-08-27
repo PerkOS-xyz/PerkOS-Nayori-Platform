@@ -27,9 +27,9 @@ import { hashMerchantApiKey, parseBearerApiKey, type MerchantRecord } from "./me
 import type { QuoteSigner, VerifiedQuoteToken } from "./quote-signing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 
-const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.2.0";
+const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.3.0";
 const SDK_NPM_INTEGRITY =
-  "sha512-u/Zo9lNxJtxNRpI8dSXMBqn86byzWNGxtZRzHBB/6WVt4VMH+i6rzlmyjOgamlC9QoZp3tHx66gHPPdshaijCA==";
+  "sha512-l+RBXY5QRLLA2OrAmqTiU831ry059MeA25JGgCWKTjXykTPdsPAtokPONyQo8qfZ0DzVdP53hcdRczHtV4YCtw==";
 const SDK_VERIFIER_CHECKSUM = createHash("sha256")
   .update(SDK_NPM_INTEGRITY, "utf8")
   .digest("hex");
