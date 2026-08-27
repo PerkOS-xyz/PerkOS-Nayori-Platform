@@ -1,9 +1,10 @@
 import { STACKS_X402_NETWORKS } from "@perkos/agent-sdk";
 
+import { oauthScopes } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.4.3";
+export const SERVICE_VERSION = "0.5.0";
 
 function serviceStatus(config: AppConfig) {
   if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
@@ -26,6 +27,9 @@ export function createSupportedDocument(config: AppConfig) {
     settlementEnabled: config.settlementEnabled,
     confirmationEnabled: config.reconciliationEnabled,
     deliveryLedgerEnabled: config.deliveryLedgerEnabled,
+    oauthEnabled: config.oauthEnabled,
+    partnerRegistrationEnabled: config.partnerRegistrationEnabled,
+    mcpEnabled: config.mcpEnabled,
     resourceDeliveryMode: config.deliveryLedgerEnabled ? "merchant-idempotent" : "unavailable",
     sponsorshipEnabled: config.sponsorshipEnabled,
     networks: config.quoteIssuanceEnabled ? [STACKS_X402_NETWORKS[config.stacksNetwork]] : [],
@@ -84,6 +88,16 @@ export function createAgentDocument(config: AppConfig) {
         ? `${config.serviceOrigin}/.well-known/jwks.json`
         : null,
       llms: `${config.serviceOrigin}/llms.txt`,
+      oauthAuthorizationServer: config.oauthEnabled
+        ? `${config.serviceOrigin}/.well-known/oauth-authorization-server`
+        : null,
+      oauthProtectedResource: config.oauthEnabled
+        ? `${config.serviceOrigin}/.well-known/oauth-protected-resource`
+        : null,
+      authGuide: config.oauthEnabled ? `${config.serviceOrigin}/auth.md` : null,
+      mcpServerCard: config.mcpEnabled
+        ? `${config.serviceOrigin}/.well-known/mcp/server-card.json`
+        : null,
       sdk: "https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK",
     },
     availability: {
@@ -95,7 +109,77 @@ export function createAgentDocument(config: AppConfig) {
       deliveryLedger: config.deliveryLedgerEnabled,
       resourceDelivery: config.deliveryLedgerEnabled ? "merchant-owned" : false,
       sponsorship: false,
+      oauth: config.oauthEnabled,
+      partnerRegistration: config.partnerRegistrationEnabled,
+      mcp: config.mcpEnabled,
     },
+  } as const;
+}
+
+export function createOAuthAuthorizationServerMetadata(config: AppConfig) {
+  return {
+    issuer: config.serviceOrigin,
+    token_endpoint: `${config.serviceOrigin}/oauth/token`,
+    jwks_uri: `${config.serviceOrigin}/oauth/jwks.json`,
+    grant_types_supported: ["client_credentials"],
+    response_types_supported: [],
+    token_endpoint_auth_methods_supported: ["client_secret_basic"],
+    scopes_supported: oauthScopes,
+    service_documentation: `${config.serviceOrigin}/auth.md`,
+  } as const;
+}
+
+export function createOAuthProtectedResourceMetadata(config: AppConfig) {
+  return {
+    resource: config.serviceOrigin,
+    authorization_servers: [config.serviceOrigin],
+    jwks_uri: `${config.serviceOrigin}/oauth/jwks.json`,
+    scopes_supported: oauthScopes,
+    bearer_methods_supported: ["header"],
+    resource_documentation: `${config.serviceOrigin}/auth.md`,
+  } as const;
+}
+
+export function createAuthMarkdown(config: AppConfig): string {
+  return `# Nayori API authentication
+
+Nayori supports OAuth 2.0 client credentials for invited partners and existing merchant API keys
+for backward compatibility. Partner enrollment is bound to a Stacks wallet by an exact plaintext
+message signed in Leather. The API never requests or stores a wallet private key.
+
+## Discovery
+
+- Authorization server: ${config.serviceOrigin}/.well-known/oauth-authorization-server
+- Protected resource: ${config.serviceOrigin}/.well-known/oauth-protected-resource
+- Token endpoint: ${config.serviceOrigin}/oauth/token
+- OAuth JWKS: ${config.serviceOrigin}/oauth/jwks.json
+
+OAuth authorizes API and MCP access. A buyer still signs each STX, sBTC or USDCx payment
+transaction separately in its wallet; an OAuth token cannot sign or approve a payment.
+
+Supported grant: client_credentials. Supported client authentication: client_secret_basic.
+Access tokens are short-lived EdDSA JWTs and must be sent in the Authorization bearer header.
+`;
+}
+
+export function createMcpServerCard(config: AppConfig) {
+  return {
+    schemaVersion: "1.0",
+    name: "Nayori x402 MCP Server",
+    description: "Experimental authenticated MCP access to Nayori x402 discovery, quotes and settlement status.",
+    status: "experimental",
+    server: {
+      url: `${config.serviceOrigin}/mcp`,
+      transport: "streamable-http",
+      protocolVersion: "2025-11-25",
+    },
+    authentication: {
+      type: "oauth2",
+      protectedResourceMetadata: `${config.serviceOrigin}/.well-known/oauth-protected-resource`,
+      requiredScopes: ["mcp:invoke"],
+    },
+    capabilities: { tools: true, prompts: false, resources: false },
+    documentation: `${config.serviceOrigin}/auth.md`,
   } as const;
 }
 
@@ -136,6 +220,51 @@ export function createOpenApiDocument(config: AppConfig) {
     },
     "/openapi.json": { get: { operationId: "getOpenApi", responses: jsonResponse } },
   };
+
+  if (config.oauthEnabled) {
+    paths["/.well-known/oauth-authorization-server"] = {
+      get: { operationId: "getOAuthAuthorizationServerMetadata", responses: jsonResponse },
+    };
+    paths["/.well-known/oauth-protected-resource"] = {
+      get: { operationId: "getOAuthProtectedResourceMetadata", responses: jsonResponse },
+    };
+    paths["/oauth/jwks.json"] = {
+      get: { operationId: "getOAuthVerificationKeys", responses: jsonResponse },
+    };
+    paths["/oauth/token"] = {
+      post: {
+        operationId: "issueOAuthClientCredentialsToken",
+        security: [{ oauthClientBasic: [] }],
+        responses: {
+          "200": { description: "A short-lived scoped access token was issued" },
+          "400": { description: "Grant or scope request is invalid" },
+          "401": { description: "Client authentication failed" },
+        },
+      },
+    };
+  }
+
+  if (config.partnerRegistrationEnabled) {
+    paths["/v1/partners/challenges"] = {
+      post: { operationId: "createPartnerWalletChallenge", responses: { "201": { description: "Wallet-signing challenge created" } } },
+    };
+    paths["/v1/partners/register"] = {
+      post: { operationId: "registerWalletLinkedOAuthClient", responses: { "201": { description: "OAuth client created; secret returned once" } } },
+    };
+  }
+
+  if (config.mcpEnabled) {
+    paths["/.well-known/mcp/server-card.json"] = {
+      get: { operationId: "getMcpServerCard", responses: jsonResponse },
+    };
+    paths["/mcp"] = {
+      post: {
+        operationId: "invokeMcpStreamableHttp",
+        security: [{ oauthBearer: ["mcp:invoke"] }],
+        responses: { ...jsonResponse, "401": { description: "OAuth token required" }, "403": { description: "mcp:invoke scope required" } },
+      },
+    };
+  }
 
   if (config.quoteIssuanceEnabled) {
     paths["/.well-known/jwks.json"] = {
@@ -276,6 +405,16 @@ export function createOpenApiDocument(config: AppConfig) {
           scheme: "bearer",
           bearerFormat: "Nayori merchant API key",
         },
+        oauthBearer: {
+          type: "oauth2",
+          flows: {
+            clientCredentials: {
+              tokenUrl: `${config.serviceOrigin}/oauth/token`,
+              scopes: Object.fromEntries(oauthScopes.map((scope) => [scope, `Allows ${scope}`])),
+            },
+          },
+        },
+        oauthClientBasic: { type: "http", scheme: "basic" },
       },
     },
   } as const;
@@ -295,6 +434,9 @@ Settlement enabled: ${config.settlementEnabled}
 Reconciliation enabled: ${config.reconciliationEnabled}
 Minimum confirmations: ${config.settlementMinConfirmations}
 Delivery ledger enabled: ${config.deliveryLedgerEnabled}
+OAuth enabled: ${config.oauthEnabled}
+Partner registration enabled: ${config.partnerRegistrationEnabled}
+MCP enabled: ${config.mcpEnabled}
 Sponsorship enabled: false
 
 ${

@@ -63,6 +63,13 @@ const environmentSchema = z
     RECONCILIATION_LEASE_MS: z.coerce.number().int().min(5_000).max(300_000).default(30_000),
     DELIVERY_LEDGER_ENABLED: booleanFlag,
     DELIVERY_RETRY_TTL_SECONDS: z.coerce.number().int().min(300).max(604_800).default(86_400),
+    OAUTH_ENABLED: booleanFlag,
+    PARTNER_REGISTRATION_ENABLED: booleanFlag,
+    MCP_ENABLED: booleanFlag,
+    OAUTH_SIGNING_PRIVATE_JWK_JSON: z.string().min(1).optional(),
+    OAUTH_PREVIOUS_PUBLIC_JWKS_JSON: z.string().min(1).default('{"keys":[]}'),
+    OAUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+    PARTNER_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(600).default(300),
     SPONSORSHIP_ENABLED: disabledFeatureFlag,
   })
   .superRefine((value, context) => {
@@ -106,6 +113,27 @@ const environmentSchema = z
         code: "custom",
         path: ["DELIVERY_LEDGER_ENABLED"],
         message: "The delivery ledger requires reconciliation.",
+      });
+    }
+    if (value.OAUTH_ENABLED && !value.OAUTH_SIGNING_PRIVATE_JWK_JSON) {
+      context.addIssue({
+        code: "custom",
+        path: ["OAUTH_SIGNING_PRIVATE_JWK_JSON"],
+        message: "OAUTH_SIGNING_PRIVATE_JWK_JSON is required when OAuth is enabled.",
+      });
+    }
+    if (value.PARTNER_REGISTRATION_ENABLED && !value.OAUTH_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["PARTNER_REGISTRATION_ENABLED"],
+        message: "Partner registration requires OAuth.",
+      });
+    }
+    if (value.MCP_ENABLED && !value.OAUTH_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["MCP_ENABLED"],
+        message: "The MCP endpoint requires OAuth.",
       });
     }
     if (
@@ -152,6 +180,13 @@ export type AppConfig = {
   readonly reconciliationLeaseMs: number;
   readonly deliveryLedgerEnabled: boolean;
   readonly deliveryRetryTtlSeconds: number;
+  readonly oauthEnabled: boolean;
+  readonly partnerRegistrationEnabled: boolean;
+  readonly mcpEnabled: boolean;
+  readonly oauthSigningPrivateJwkJson?: string;
+  readonly oauthPreviousPublicJwksJson: string;
+  readonly oauthAccessTokenTtlSeconds: number;
+  readonly partnerChallengeTtlSeconds: number;
   readonly sponsorshipEnabled: false;
 };
 
@@ -189,6 +224,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     reconciliationLeaseMs: value.RECONCILIATION_LEASE_MS,
     deliveryLedgerEnabled: value.DELIVERY_LEDGER_ENABLED,
     deliveryRetryTtlSeconds: value.DELIVERY_RETRY_TTL_SECONDS,
+    oauthEnabled: value.OAUTH_ENABLED,
+    partnerRegistrationEnabled: value.PARTNER_REGISTRATION_ENABLED,
+    mcpEnabled: value.MCP_ENABLED,
+    oauthSigningPrivateJwkJson: value.OAUTH_SIGNING_PRIVATE_JWK_JSON,
+    oauthPreviousPublicJwksJson: value.OAUTH_PREVIOUS_PUBLIC_JWKS_JSON,
+    oauthAccessTokenTtlSeconds: value.OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+    partnerChallengeTtlSeconds: value.PARTNER_CHALLENGE_TTL_SECONDS,
     sponsorshipEnabled: value.SPONSORSHIP_ENABLED,
   };
 }

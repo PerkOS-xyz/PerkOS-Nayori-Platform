@@ -8,13 +8,19 @@ import type { AppConfig } from "./config.js";
 import type { DatabaseHealth } from "./database.js";
 import {
   createAgentDocument,
+  createAuthMarkdown,
   createLlmsText,
+  createMcpServerCard,
   createOpenApiDocument,
+  createOAuthAuthorizationServerMetadata,
+  createOAuthProtectedResourceMetadata,
   createSupportedDocument,
   SERVICE_NAME,
   SERVICE_VERSION,
 } from "./documents.js";
 import type { AppLogger } from "./logger.js";
+import { McpAuthenticationError, type McpService } from "./mcp.js";
+import { OAuthServiceError, type OAuthService } from "./oauth.js";
 import { QuoteServiceError, type QuoteService } from "./quotes.js";
 import { SettlementServiceError, type SettlementService } from "./settlement.js";
 
@@ -28,6 +34,8 @@ export type CreateAppOptions = {
   readonly logger: AppLogger;
   readonly quoteService?: QuoteService;
   readonly settlementService?: SettlementService;
+  readonly oauthService?: OAuthService;
+  readonly mcpService?: McpService;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -37,13 +45,27 @@ function errorBody(code: string, message: string, requestId: string) {
   return { error: { code, message, requestId } } as const;
 }
 
+function bearerChallenge(config: AppConfig, realm: string, scope?: string): string {
+  const metadata = config.oauthEnabled
+    ? `, resource_metadata="${config.serviceOrigin}/.well-known/oauth-protected-resource"`
+    : "";
+  const oauthError = scope ? `, error="insufficient_scope", scope="${scope}"` : "";
+  return `Bearer realm="${realm}"${metadata}${oauthError}`;
+}
+
 export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVariables }> {
-  const { config, database, logger, quoteService, settlementService } = options;
+  const { config, database, logger, quoteService, settlementService, oauthService, mcpService } = options;
   if (config.quoteIssuanceEnabled && !quoteService) {
     throw new Error("Quote issuance is enabled without a quote service.");
   }
   if (config.paymentVerificationEnabled && !settlementService) {
     throw new Error("Payment verification is enabled without a settlement service.");
+  }
+  if (config.oauthEnabled && !oauthService) {
+    throw new Error("OAuth is enabled without an OAuth service.");
+  }
+  if (config.mcpEnabled && !mcpService) {
+    throw new Error("MCP is enabled without an MCP service.");
   }
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -104,6 +126,28 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
         ),
     }),
   );
+  app.use(
+    "/oauth/*",
+    bodyLimit({
+      maxSize: 16 * 1024,
+      onError: (context) =>
+        context.json(
+          errorBody("request_too_large", "The request body exceeds the 16 KiB limit.", context.get("requestId")),
+          413,
+        ),
+    }),
+  );
+  app.use(
+    "/mcp",
+    bodyLimit({
+      maxSize: 64 * 1024,
+      onError: (context) =>
+        context.json(
+          errorBody("request_too_large", "The request body exceeds the 64 KiB limit.", context.get("requestId")),
+          413,
+        ),
+    }),
+  );
 
   app.get("/health", (context) =>
     context.json({
@@ -142,6 +186,103 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
   app.get("/openapi.json", (context) => context.json(createOpenApiDocument(config)));
   app.get("/llms.txt", (context) => context.text(createLlmsText(config)));
 
+  if (config.oauthEnabled && oauthService) {
+    app.get("/.well-known/oauth-authorization-server", (context) =>
+      context.json(createOAuthAuthorizationServerMetadata(config)),
+    );
+    app.get("/.well-known/oauth-protected-resource", (context) =>
+      context.json(createOAuthProtectedResourceMetadata(config)),
+    );
+    app.get("/oauth/jwks.json", (context) => context.json(oauthService.publicJwks));
+    app.get("/auth.md", (context) => context.text(createAuthMarkdown(config), 200, {
+      "content-type": "text/markdown; charset=UTF-8",
+    }));
+    app.post("/oauth/token", async (context) => {
+      try {
+        const form = new URLSearchParams(await context.req.text());
+        return context.json(
+          await oauthService.issueToken(context.req.header("authorization"), form),
+        );
+      } catch (error) {
+        if (!(error instanceof OAuthServiceError)) throw error;
+        if (error.status === 401) {
+          context.header("www-authenticate", 'Basic realm="nayori-oauth"');
+        }
+        return context.json(
+          {
+            error: error.code,
+            error_description: error.publicMessage,
+            request_id: context.get("requestId"),
+          },
+          error.status,
+        );
+      }
+    });
+
+    if (config.partnerRegistrationEnabled) {
+      app.post("/v1/partners/challenges", async (context) => {
+        let input: unknown;
+        try {
+          input = await context.req.json();
+        } catch {
+          return context.json(
+            errorBody("invalid_request", "The partner challenge must be valid JSON.", context.get("requestId")),
+            400,
+          );
+        }
+        try {
+          return context.json({ challenge: await oauthService.issueChallenge(input) }, 201);
+        } catch (error) {
+          if (!(error instanceof OAuthServiceError)) throw error;
+          return context.json(errorBody(error.code, error.publicMessage, context.get("requestId")), error.status);
+        }
+      });
+      app.post("/v1/partners/register", async (context) => {
+        let input: unknown;
+        try {
+          input = await context.req.json();
+        } catch {
+          return context.json(
+            errorBody("invalid_request", "The partner registration must be valid JSON.", context.get("requestId")),
+            400,
+          );
+        }
+        try {
+          return context.json({ client: await oauthService.register(input) }, 201);
+        } catch (error) {
+          if (!(error instanceof OAuthServiceError)) throw error;
+          return context.json(errorBody(error.code, error.publicMessage, context.get("requestId")), error.status);
+        }
+      });
+    }
+  }
+
+  if (config.mcpEnabled && mcpService) {
+    app.get("/.well-known/mcp/server-card.json", (context) =>
+      context.json(createMcpServerCard(config)),
+    );
+    app.get("/.well-known/mcp.json", (context) => context.json(createMcpServerCard(config)));
+    app.post("/mcp", async (context) => {
+      let input: unknown;
+      try {
+        input = await context.req.json();
+      } catch {
+        return context.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
+      }
+      try {
+        return context.json(await mcpService.handle(context.req.header("authorization"), input));
+      } catch (error) {
+        if (!(error instanceof McpAuthenticationError)) throw error;
+        const scope = error.code === "insufficient_scope" ? ', error="insufficient_scope", scope="mcp:invoke"' : "";
+        context.header(
+          "www-authenticate",
+          `Bearer resource_metadata="${config.serviceOrigin}/.well-known/oauth-protected-resource"${scope}`,
+        );
+        return context.json(errorBody(error.code, "A bearer token with mcp:invoke is required.", context.get("requestId")), error.code === "insufficient_scope" ? 403 : 401);
+      }
+    });
+  }
+
   if (config.quoteIssuanceEnabled && quoteService) {
     app.get("/.well-known/jwks.json", (context) => context.json(quoteService.publicJwks));
     app.post("/v1/quotes", async (context) => {
@@ -167,7 +308,12 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
         return context.json(issued.response, 201);
       } catch (error) {
         if (!(error instanceof QuoteServiceError)) throw error;
-        if (error.status === 401) context.header("www-authenticate", 'Bearer realm="nayori-quotes"');
+        if (error.status === 401 || error.code === "insufficient_scope") {
+          context.header(
+            "www-authenticate",
+            bearerChallenge(config, "nayori-quotes", error.code === "insufficient_scope" ? "quotes:create" : undefined),
+          );
+        }
         if (error.status === 429 && error.retryAfterSeconds) {
           context.header("retry-after", String(error.retryAfterSeconds));
         }
@@ -205,8 +351,11 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
         return context.json({ verification });
       } catch (error) {
         if (!(error instanceof SettlementServiceError)) throw error;
-        if (error.status === 401) {
-          context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+        if (error.status === 401 || error.code === "insufficient_scope") {
+          context.header(
+            "www-authenticate",
+            bearerChallenge(config, "nayori-settlement", error.code === "insufficient_scope" ? "payments:verify" : undefined),
+          );
         }
         if (error.status === 429 && error.retryAfterSeconds) {
           context.header("retry-after", String(error.retryAfterSeconds));
@@ -249,8 +398,11 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
           );
         } catch (error) {
           if (!(error instanceof SettlementServiceError)) throw error;
-          if (error.status === 401) {
-            context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+          if (error.status === 401 || error.code === "insufficient_scope") {
+            context.header(
+              "www-authenticate",
+              bearerChallenge(config, "nayori-settlement", error.code === "insufficient_scope" ? "payments:settle" : undefined),
+            );
           }
           if (error.status === 429 && error.retryAfterSeconds) {
             context.header("retry-after", String(error.retryAfterSeconds));
@@ -271,8 +423,11 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
           return context.json({ settlement });
         } catch (error) {
           if (!(error instanceof SettlementServiceError)) throw error;
-          if (error.status === 401) {
-            context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+          if (error.status === 401 || error.code === "insufficient_scope") {
+            context.header(
+              "www-authenticate",
+              bearerChallenge(config, "nayori-settlement", error.code === "insufficient_scope" ? "payments:read" : undefined),
+            );
           }
           if (error.status === 429 && error.retryAfterSeconds) {
             context.header("retry-after", String(error.retryAfterSeconds));
@@ -301,8 +456,11 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
             return context.json({ delivery });
           } catch (error) {
             if (!(error instanceof SettlementServiceError)) throw error;
-            if (error.status === 401) {
-              context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+            if (error.status === 401 || error.code === "insufficient_scope") {
+              context.header(
+                "www-authenticate",
+                bearerChallenge(config, "nayori-settlement", error.code === "insufficient_scope" ? "payments:read" : undefined),
+              );
             }
             if (error.status === 429 && error.retryAfterSeconds) {
               context.header("retry-after", String(error.retryAfterSeconds));
@@ -364,8 +522,11 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
             return context.json({ delivery });
           } catch (error) {
             if (!(error instanceof SettlementServiceError)) throw error;
-            if (error.status === 401) {
-              context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+            if (error.status === 401 || error.code === "insufficient_scope") {
+              context.header(
+                "www-authenticate",
+                bearerChallenge(config, "nayori-settlement", error.code === "insufficient_scope" ? "payments:settle" : undefined),
+              );
             }
             if (error.status === 429 && error.retryAfterSeconds) {
               context.header("retry-after", String(error.retryAfterSeconds));
