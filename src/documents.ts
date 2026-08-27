@@ -3,17 +3,27 @@ import { STACKS_X402_NETWORKS } from "@perkos/agent-sdk";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.2.0";
+export const SERVICE_VERSION = "0.3.0";
+
+function serviceStatus(config: AppConfig) {
+  if (config.settlementEnabled) return "testnet-settlement-broadcast";
+  if (config.paymentVerificationEnabled) return "verification-ready";
+  if (config.quoteIssuanceEnabled) return "quote-ready";
+  return "foundation";
+}
 
 export function createSupportedDocument(config: AppConfig) {
   return {
     service: SERVICE_NAME,
     version: SERVICE_VERSION,
     release: config.releaseSha,
-    status: config.quoteIssuanceEnabled ? "quote-ready" : "foundation",
+    status: serviceStatus(config),
     x402Version: 2,
     quoteIssuanceEnabled: config.quoteIssuanceEnabled,
+    paymentVerificationEnabled: config.paymentVerificationEnabled,
     settlementEnabled: config.settlementEnabled,
+    confirmationEnabled: false,
+    deliveryEnabled: false,
     sponsorshipEnabled: config.sponsorshipEnabled,
     networks: config.quoteIssuanceEnabled ? [STACKS_X402_NETWORKS[config.stacksNetwork]] : [],
     mechanisms: config.quoteIssuanceEnabled
@@ -23,7 +33,7 @@ export function createSupportedDocument(config: AppConfig) {
             assetTransferMethod: "stacks-signed-tx-v1",
             paymentFlow: "upfront",
             assets: ["STX", "sBTC", "USDCx"],
-            settlement: false,
+            settlement: config.settlementEnabled ? "broadcast-only-confirmation-pending" : false,
           },
         ]
       : [],
@@ -41,14 +51,18 @@ export function createAgentDocument(config: AppConfig) {
     type: "x402-facilitator",
     name: "Nayori x402 Facilitator",
     provider: { name: "PerkOS", url: "https://perkos.xyz" },
-    status: config.quoteIssuanceEnabled ? "quote-ready" : "foundation",
+    status: serviceStatus(config),
     homepage: config.serviceOrigin,
     network: config.stacksNetwork,
     authorization: {
       reads: "public discovery only",
-      writes: config.quoteIssuanceEnabled
-        ? "merchant bearer authentication for request-bound quote issuance only"
-        : "unavailable while quote issuance is disabled",
+      writes: config.settlementEnabled
+        ? "merchant bearer authentication for quote, verification and testnet broadcast operations"
+        : config.paymentVerificationEnabled
+          ? "merchant bearer authentication for quote and verify-only operations"
+          : config.quoteIssuanceEnabled
+            ? "merchant bearer authentication for request-bound quote issuance only"
+            : "unavailable while quote issuance is disabled",
       custody: "Nayori does not request or store buyer private keys.",
     },
     discovery: {
@@ -66,8 +80,10 @@ export function createAgentDocument(config: AppConfig) {
     availability: {
       discovery: true,
       quote: config.quoteIssuanceEnabled,
-      verify: false,
-      settle: false,
+      verify: config.paymentVerificationEnabled,
+      settle: config.settlementEnabled,
+      confirmation: false,
+      delivery: false,
       sponsorship: false,
     },
   } as const;
@@ -135,14 +151,71 @@ export function createOpenApiDocument(config: AppConfig) {
     };
   }
 
+  if (config.paymentVerificationEnabled) {
+    paths["/v1/x402/verify"] = {
+      post: {
+        operationId: "verifyDirectPayment",
+        security: [{ merchantBearer: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        responses: {
+          "200": { description: "The signed transaction satisfies the quote; no broadcast occurred" },
+          "401": { description: "Merchant authentication failed" },
+          "409": { description: "The quote is unavailable" },
+          "422": { description: "Quote or payment verification failed" },
+          "429": { description: "The merchant payment-operation rate limit was exceeded" },
+        },
+      },
+    };
+  }
+
+  if (config.settlementEnabled) {
+    paths["/v1/x402/settle"] = {
+      post: {
+        operationId: "settleDirectPaymentTestnet",
+        security: [{ merchantBearer: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        responses: {
+          "202": { description: "Reserved and broadcast, or pending reconciliation; not confirmed" },
+          "401": { description: "Merchant authentication failed" },
+          "409": { description: "Quote or transaction replay" },
+          "422": { description: "Verification or definitive broadcast rejection" },
+          "429": { description: "The merchant payment-operation rate limit was exceeded" },
+        },
+      },
+    };
+    paths["/v1/x402/settlements/{id}"] = {
+      get: {
+        operationId: "getDirectSettlement",
+        security: [{ merchantBearer: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          ...jsonResponse,
+          "401": { description: "Authentication failed" },
+          "404": { description: "Settlement not found" },
+          "429": { description: "The merchant payment-operation rate limit was exceeded" },
+        },
+      },
+    };
+  }
+
   return {
     openapi: "3.1.0",
     info: {
       title: "Nayori x402 Facilitator API",
       version: SERVICE_VERSION,
-      description: config.quoteIssuanceEnabled
-        ? "Issues authenticated request-bound quotes. Payment verification and settlement are disabled."
-        : "Foundation release. Quote, verification and settlement operations are disabled.",
+      description: config.settlementEnabled
+        ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
+        : config.paymentVerificationEnabled
+          ? "Issues authenticated quotes and verifies payments without broadcasting or delivery."
+          : config.quoteIssuanceEnabled
+            ? "Issues authenticated request-bound quotes. Payment verification and settlement are disabled."
+            : "Foundation release. Quote, verification and settlement operations are disabled.",
     },
     servers: [{ url: config.serviceOrigin }],
     paths,
@@ -163,20 +236,25 @@ export function createLlmsText(config: AppConfig): string {
 
 > Private PerkOS infrastructure for request-bound x402 payments on Stacks.
 
-Status: ${config.quoteIssuanceEnabled ? "quote-ready" : "foundation"}
+Status: ${serviceStatus(config)}
 Origin: ${config.serviceOrigin}
 Network target: ${config.stacksNetwork}
 Quote issuance enabled: ${config.quoteIssuanceEnabled}
-Settlement enabled: false
+Payment verification enabled: ${config.paymentVerificationEnabled}
+Settlement enabled: ${config.settlementEnabled}
 Sponsorship enabled: false
 
 ${
-  config.quoteIssuanceEnabled
-    ? "Authenticated merchants may issue short-lived request-bound quotes. This release does not verify payments, broadcast transactions, settle payments, sponsor fees or deliver paid resources."
+  config.settlementEnabled
+    ? "Authenticated merchants may issue quotes, verify standard direct payments and request one testnet broadcast. Broadcast and pending states are not confirmation. Reconciliation, sponsorship and resource delivery are unavailable."
+    : config.paymentVerificationEnabled
+      ? "Authenticated merchants may issue quotes and verify standard direct payments. Verification does not broadcast, confirm, settle or deliver a resource."
+      : config.quoteIssuanceEnabled
+        ? "Authenticated merchants may issue short-lived request-bound quotes. This release does not verify payments, broadcast transactions, settle payments, sponsor fees or deliver paid resources."
     : "This release exposes discovery and health endpoints only. It does not issue quotes, verify payments, broadcast transactions, settle payments, sponsor fees or deliver paid resources."
 }
-Do not treat quote issuance as proof of payment. No settlement operation is advertised until its
-security gates are complete.
+Never treat quote issuance, verify-only or a broadcast response as confirmed payment. Confirmation
+and resource delivery remain unavailable in this release.
 
 SDK: https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK
 Product: https://nayori.ai

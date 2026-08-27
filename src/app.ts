@@ -16,6 +16,7 @@ import {
 } from "./documents.js";
 import type { AppLogger } from "./logger.js";
 import { QuoteServiceError, type QuoteService } from "./quotes.js";
+import { SettlementServiceError, type SettlementService } from "./settlement.js";
 
 type AppVariables = {
   requestId: string;
@@ -26,6 +27,7 @@ export type CreateAppOptions = {
   readonly database: DatabaseHealth;
   readonly logger: AppLogger;
   readonly quoteService?: QuoteService;
+  readonly settlementService?: SettlementService;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -35,9 +37,12 @@ function errorBody(code: string, message: string, requestId: string) {
 }
 
 export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVariables }> {
-  const { config, database, logger, quoteService } = options;
+  const { config, database, logger, quoteService, settlementService } = options;
   if (config.quoteIssuanceEnabled && !quoteService) {
     throw new Error("Quote issuance is enabled without a quote service.");
+  }
+  if (config.paymentVerificationEnabled && !settlementService) {
+    throw new Error("Payment verification is enabled without a settlement service.");
   }
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -171,6 +176,113 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
         );
       }
     });
+  }
+
+  if (config.paymentVerificationEnabled && settlementService) {
+    app.post("/v1/x402/verify", async (context) => {
+      let input: unknown;
+      try {
+        input = await context.req.json();
+      } catch {
+        return context.json(
+          errorBody("invalid_request", "The payment request must be valid JSON.", context.get("requestId")),
+          400,
+        );
+      }
+      try {
+        const verification = await settlementService.verify(
+          context.req.header("authorization"),
+          input,
+        );
+        logger.info({
+          event: "payment_verified",
+          requestId: context.get("requestId"),
+          merchantId: verification.merchantId,
+          quoteId: verification.quoteId,
+          txid: verification.txid,
+        });
+        return context.json({ verification });
+      } catch (error) {
+        if (!(error instanceof SettlementServiceError)) throw error;
+        if (error.status === 401) {
+          context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+        }
+        if (error.status === 429 && error.retryAfterSeconds) {
+          context.header("retry-after", String(error.retryAfterSeconds));
+        }
+        return context.json(
+          errorBody(error.code, error.publicMessage, context.get("requestId")),
+          error.status,
+        );
+      }
+    });
+
+    if (config.settlementEnabled) {
+      app.post("/v1/x402/settle", async (context) => {
+        let input: unknown;
+        try {
+          input = await context.req.json();
+        } catch {
+          return context.json(
+            errorBody("invalid_request", "The payment request must be valid JSON.", context.get("requestId")),
+            400,
+          );
+        }
+        try {
+          const result = await settlementService.settle(
+            context.req.header("authorization"),
+            input,
+          );
+          logger.info({
+            event: "settlement_reserved",
+            requestId: context.get("requestId"),
+            settlementId: result.settlement.settlementId,
+            quoteId: result.settlement.quoteId,
+            txid: result.settlement.txid,
+            status: result.settlement.status,
+            replayed: result.replayed,
+          });
+          return context.json(
+            result,
+            result.settlement.status === "failed" ? 422 : 202,
+          );
+        } catch (error) {
+          if (!(error instanceof SettlementServiceError)) throw error;
+          if (error.status === 401) {
+            context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+          }
+          if (error.status === 429 && error.retryAfterSeconds) {
+            context.header("retry-after", String(error.retryAfterSeconds));
+          }
+          return context.json(
+            errorBody(error.code, error.publicMessage, context.get("requestId")),
+            error.status,
+          );
+        }
+      });
+
+      app.get("/v1/x402/settlements/:id", async (context) => {
+        try {
+          const settlement = await settlementService.get(
+            context.req.header("authorization"),
+            context.req.param("id"),
+          );
+          return context.json({ settlement });
+        } catch (error) {
+          if (!(error instanceof SettlementServiceError)) throw error;
+          if (error.status === 401) {
+            context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+          }
+          if (error.status === 429 && error.retryAfterSeconds) {
+            context.header("retry-after", String(error.retryAfterSeconds));
+          }
+          return context.json(
+            errorBody(error.code, error.publicMessage, context.get("requestId")),
+            error.status,
+          );
+        }
+      });
+    }
   }
 
   app.notFound((context) =>

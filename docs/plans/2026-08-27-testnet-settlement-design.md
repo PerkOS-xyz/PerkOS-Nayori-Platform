@@ -32,10 +32,11 @@ transactions are rejected because sponsorship is a separate security boundary. `
 normalized non-secret evidence and performs no mutation.
 
 `/settle` repeats all verification, then atomically locks the quote, inserts one settlement in
-`validated`, appends its first transition and moves the quote to `reserved`. A retry returns the
-existing settlement and never broadcasts again. Only the process that created the reservation may
-submit the canonical raw bytes to the configured Hiro `/v2/transactions` endpoint. The response
-txid must equal the SDK-derived txid.
+`validated`, appends its first transition and moves the quote to `reserved`. A retry during quote
+validity returns the existing settlement and never broadcasts again; after quote expiry the
+authenticated status endpoint is the idempotent recovery path. Only the process that created the
+reservation may submit the canonical raw bytes to the configured Hiro `/v2/transactions`
+endpoint. The response txid must equal the SDK-derived txid.
 
 ## State and timeout behavior
 
@@ -54,8 +55,8 @@ issued quote -> reserved + validated settlement
 validated -> failed only for a definitive pre-acceptance broadcast rejection
 ```
 
-Accepted, ambiguous and rejected attempts all consume or revoke the quote so a signed payment
-cannot be replayed with a replacement transaction. If the process crashes after reservation but
+Accepted, ambiguous and rejected attempts all leave the quote reserved so a signed payment cannot
+be replayed with a replacement transaction. If the process crashes after reservation but
 before persisting a broadcast outcome, the settlement remains `validated`; retries return that
 record without rebroadcasting. The reconciliation worker in the next PR must resolve `validated`,
 `broadcast` and `pending` by deterministic txid before any further action.
@@ -85,7 +86,7 @@ ambiguous timeout/network failure returns 202 with `pending`. Database errors re
 and never trigger an unreserved broadcast.
 
 Tests must cover signature and token tampering, token-hash mismatch, merchant isolation, expiry,
-all SDK verifier rejections, sponsored transactions, concurrent reservation, replay by quote and
+stable SDK rejection propagation, sponsored transactions, concurrent reservation, replay by quote and
 txid, accepted broadcast, mismatched broadcast txid, definitive rejection, timeout ambiguity and
 retry without rebroadcast. PostgreSQL CI must apply all migrations twice and exercise the atomic
 reservation/state transitions. Lint, strict types, all tests, build and full dependency audit are

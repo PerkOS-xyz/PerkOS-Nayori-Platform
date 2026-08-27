@@ -13,6 +13,8 @@ describe.skipIf(!runIntegration)("PostgreSQL merchant quote store", () => {
     const database = new PostgresDatabase(config);
     const firstKey = generateMerchantApiKey();
     const secondKey = generateMerchantApiKey();
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt.getTime() + 120_000);
     const provisioning = {
       merchantId: "integration-merchant",
       status: "active" as const,
@@ -62,9 +64,44 @@ describe.skipIf(!runIntegration)("PostgreSQL merchant quote store", () => {
         fingerprint: `ny1_${"a".repeat(27)}`,
         routeConfigHash: "b".repeat(64),
         signedTokenHash: "c".repeat(64),
-        issuedAt: new Date("2026-08-26T20:00:00Z"),
-        expiresAt: new Date("2026-08-26T20:02:00Z"),
+        issuedAt,
+        expiresAt,
       });
+
+      const reservationInput = {
+        settlementId: "integration-settlement",
+        quoteId: "integration-quote",
+        merchantId: "integration-merchant",
+        network: "stacks:2147483648",
+        txid: `0x${"d".repeat(64)}`,
+        payer: "ST2JXKMSH007NPYAQHKJPQMAQYAD90NQGTVJVQ02B",
+        rawTxHash: "e".repeat(64),
+        verifierVersion: "@perkos/agent-sdk@0.2.0",
+        verifierChecksum: "f".repeat(64),
+        expectedSignedTokenHash: "c".repeat(64),
+      };
+      const concurrent = await Promise.all([
+        database.reserveSettlement(reservationInput),
+        database.reserveSettlement(reservationInput),
+      ]);
+      expect(concurrent.map((result) => result.created).sort()).toEqual([false, true]);
+      expect(concurrent[0]?.settlement).toMatchObject({
+        status: "validated",
+        quoteId: "integration-quote",
+        settlementId: "integration-settlement",
+      });
+      await expect(
+        database.updateSettlementStatus(
+          "integration-settlement",
+          "validated",
+          "pending",
+          "broadcast_timeout",
+          new Date(),
+        ),
+      ).resolves.toMatchObject({ status: "pending", failureReason: "broadcast_timeout" });
+      await expect(
+        database.findSettlementForMerchant("integration-settlement", "integration-merchant"),
+      ).resolves.toMatchObject({ txid: reservationInput.txid, status: "pending" });
     } finally {
       await database.close();
     }
