@@ -14,6 +14,8 @@ describe("loadConfig", () => {
     expect(config.stacksNetwork).toBe("testnet");
     expect(config.quoteIssuanceEnabled).toBe(false);
     expect(config.quoteMaxTtlSeconds).toBe(300);
+    expect(config.paymentVerificationEnabled).toBe(false);
+    expect(config.paymentRateLimitPerMinute).toBe(60);
     expect(config.settlementEnabled).toBe(false);
     expect(config.sponsorshipEnabled).toBe(false);
     expect(config.port).toBe(8080);
@@ -28,12 +30,11 @@ describe("loadConfig", () => {
     expect(config.serviceOrigin).toBe("https://api.nayori.ai");
   });
 
-  it.each(["SETTLEMENT_ENABLED", "SPONSORSHIP_ENABLED"])(
-    "rejects a truthy %s flag",
-    (flag) => {
-      expect(() => loadConfig({ ...REQUIRED_ENVIRONMENT, [flag]: "true" })).toThrow();
-    },
-  );
+  it("continues to reject sponsorship", () => {
+    expect(() =>
+      loadConfig({ ...REQUIRED_ENVIRONMENT, SPONSORSHIP_ENABLED: "true" }),
+    ).toThrow();
+  });
 
   it("rejects a non-PostgreSQL database URL", () => {
     expect(() =>
@@ -65,5 +66,46 @@ describe("loadConfig", () => {
     expect(() =>
       loadConfig({ ...REQUIRED_ENVIRONMENT, QUOTE_ISSUANCE_ENABLED: "yes" }),
     ).toThrow();
+  });
+
+  it("requires quote issuance before payment verification", () => {
+    expect(() =>
+      loadConfig({ ...REQUIRED_ENVIRONMENT, PAYMENT_VERIFICATION_ENABLED: "true" }),
+    ).toThrow(/requires quote issuance/i);
+  });
+
+  it("requires verification and testnet before settlement", () => {
+    const base = {
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+    };
+    expect(() => loadConfig({ ...base, SETTLEMENT_ENABLED: "true" })).toThrow(
+      /requires payment verification/i,
+    );
+    expect(() =>
+      loadConfig({
+        ...base,
+        PAYMENT_VERIFICATION_ENABLED: "true",
+        SETTLEMENT_ENABLED: "true",
+        STACKS_NETWORK: "mainnet",
+      }),
+    ).toThrow(/restricted to Stacks testnet/i);
+  });
+
+  it("accepts explicit testnet verification and settlement", () => {
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+      PAYMENT_VERIFICATION_ENABLED: "true",
+      SETTLEMENT_ENABLED: "true",
+      STACKS_NETWORK: "testnet",
+      STACKS_API_URL: "https://api.testnet.hiro.so/",
+    });
+
+    expect(config.paymentVerificationEnabled).toBe(true);
+    expect(config.settlementEnabled).toBe(true);
+    expect(config.stacksApiUrl).toBe("https://api.testnet.hiro.so");
   });
 });

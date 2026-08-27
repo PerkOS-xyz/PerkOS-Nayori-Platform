@@ -24,6 +24,13 @@ const booleanFlag = z
   .default("false")
   .transform((value) => value === "true" || value === "1");
 
+const httpUrlSchema = z.url().superRefine((value, context) => {
+  const protocol = new URL(value).protocol;
+  if (protocol !== "http:" && protocol !== "https:") {
+    context.addIssue({ code: "custom", message: "URL must use http:// or https://." });
+  }
+});
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -38,12 +45,16 @@ const environmentSchema = z
     DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(250).max(30_000).default(5_000),
     DATABASE_QUERY_TIMEOUT_MS: z.coerce.number().int().min(250).max(60_000).default(10_000),
     STACKS_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
+    STACKS_API_URL: httpUrlSchema.default("https://api.testnet.hiro.so"),
+    STACKS_BROADCAST_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(10_000),
     QUOTE_ISSUANCE_ENABLED: booleanFlag,
     QUOTE_SIGNING_PRIVATE_JWK_JSON: z.string().min(1).optional(),
     QUOTE_PREVIOUS_PUBLIC_JWKS_JSON: z.string().min(1).default('{"keys":[]}'),
     QUOTE_MAX_TTL_SECONDS: z.coerce.number().int().min(15).max(300).default(300),
     QUOTE_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
-    SETTLEMENT_ENABLED: disabledFeatureFlag,
+    PAYMENT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
+    PAYMENT_VERIFICATION_ENABLED: booleanFlag,
+    SETTLEMENT_ENABLED: booleanFlag,
     SPONSORSHIP_ENABLED: disabledFeatureFlag,
   })
   .superRefine((value, context) => {
@@ -52,6 +63,38 @@ const environmentSchema = z
         code: "custom",
         path: ["QUOTE_SIGNING_PRIVATE_JWK_JSON"],
         message: "QUOTE_SIGNING_PRIVATE_JWK_JSON is required when quote issuance is enabled.",
+      });
+    }
+    if (value.PAYMENT_VERIFICATION_ENABLED && !value.QUOTE_ISSUANCE_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["PAYMENT_VERIFICATION_ENABLED"],
+        message: "Payment verification requires quote issuance.",
+      });
+    }
+    if (value.SETTLEMENT_ENABLED && !value.PAYMENT_VERIFICATION_ENABLED) {
+      context.addIssue({
+        code: "custom",
+        path: ["SETTLEMENT_ENABLED"],
+        message: "Settlement requires payment verification.",
+      });
+    }
+    if (value.SETTLEMENT_ENABLED && value.STACKS_NETWORK !== "testnet") {
+      context.addIssue({
+        code: "custom",
+        path: ["STACKS_NETWORK"],
+        message: "Settlement is restricted to Stacks testnet in this release.",
+      });
+    }
+    if (
+      value.SETTLEMENT_ENABLED &&
+      value.NODE_ENV === "production" &&
+      new URL(value.STACKS_API_URL).protocol !== "https:"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["STACKS_API_URL"],
+        message: "Production settlement requires an HTTPS Stacks API URL.",
       });
     }
   });
@@ -69,12 +112,16 @@ export type AppConfig = {
   readonly databaseConnectTimeoutMs: number;
   readonly databaseQueryTimeoutMs: number;
   readonly stacksNetwork: "testnet" | "mainnet";
+  readonly stacksApiUrl: string;
+  readonly stacksBroadcastTimeoutMs: number;
   readonly quoteIssuanceEnabled: boolean;
   readonly quoteSigningPrivateJwkJson?: string;
   readonly quotePreviousPublicJwksJson: string;
   readonly quoteMaxTtlSeconds: number;
   readonly quoteRateLimitPerMinute: number;
-  readonly settlementEnabled: false;
+  readonly paymentRateLimitPerMinute: number;
+  readonly paymentVerificationEnabled: boolean;
+  readonly settlementEnabled: boolean;
   readonly sponsorshipEnabled: false;
 };
 
@@ -94,11 +141,15 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     databaseConnectTimeoutMs: value.DATABASE_CONNECT_TIMEOUT_MS,
     databaseQueryTimeoutMs: value.DATABASE_QUERY_TIMEOUT_MS,
     stacksNetwork: value.STACKS_NETWORK,
+    stacksApiUrl: value.STACKS_API_URL.replace(/\/$/, ""),
+    stacksBroadcastTimeoutMs: value.STACKS_BROADCAST_TIMEOUT_MS,
     quoteIssuanceEnabled: value.QUOTE_ISSUANCE_ENABLED,
     quoteSigningPrivateJwkJson: value.QUOTE_SIGNING_PRIVATE_JWK_JSON,
     quotePreviousPublicJwksJson: value.QUOTE_PREVIOUS_PUBLIC_JWKS_JSON,
     quoteMaxTtlSeconds: value.QUOTE_MAX_TTL_SECONDS,
     quoteRateLimitPerMinute: value.QUOTE_RATE_LIMIT_PER_MINUTE,
+    paymentRateLimitPerMinute: value.PAYMENT_RATE_LIMIT_PER_MINUTE,
+    paymentVerificationEnabled: value.PAYMENT_VERIFICATION_ENABLED,
     settlementEnabled: value.SETTLEMENT_ENABLED,
     sponsorshipEnabled: value.SPONSORSHIP_ENABLED,
   };

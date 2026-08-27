@@ -1,18 +1,37 @@
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./app.js";
+import { createHiroTransactionBroadcaster } from "./broadcast.js";
 import { loadConfig } from "./config.js";
 import { PostgresDatabase } from "./database.js";
 import { consoleLogger } from "./logger.js";
 import { createQuoteSigner } from "./quote-signing.js";
 import { createQuoteService } from "./quotes.js";
+import { createSettlementService } from "./settlement.js";
 
 const config = loadConfig();
 const database = new PostgresDatabase(config);
+const quoteSigner = config.quoteIssuanceEnabled ? await createQuoteSigner(config) : undefined;
 const quoteService = config.quoteIssuanceEnabled
-  ? createQuoteService({ config, store: database, signer: await createQuoteSigner(config) })
+  ? createQuoteService({ config, store: database, signer: quoteSigner! })
   : undefined;
-const app = createApp({ config, database, logger: consoleLogger, quoteService });
+const settlementService = config.paymentVerificationEnabled
+  ? createSettlementService({
+      config,
+      store: database,
+      signer: quoteSigner!,
+      ...(config.settlementEnabled
+        ? { broadcaster: createHiroTransactionBroadcaster({ config }) }
+        : {}),
+    })
+  : undefined;
+const app = createApp({
+  config,
+  database,
+  logger: consoleLogger,
+  quoteService,
+  settlementService,
+});
 
 const server = serve(
   {
@@ -27,6 +46,7 @@ const server = serve(
       port: info.port,
       release: config.releaseSha,
       quoteIssuanceEnabled: config.quoteIssuanceEnabled,
+      paymentVerificationEnabled: config.paymentVerificationEnabled,
       settlementEnabled: config.settlementEnabled,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });

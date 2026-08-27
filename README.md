@@ -5,14 +5,14 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at **authenticated quote issuance** stage. It provides a fail-closed HTTP
-service, merchant authentication, short-lived request-bound Ed25519-signed quotes, PostgreSQL
-state, migrations, container build and CI. It does **not** verify or broadcast transactions,
-settle payments, sponsor fees or deliver paid resources.
+This repository is at the **testnet verification and broadcast boundary**. It provides a
+fail-closed HTTP service, merchant authentication, request-bound Ed25519-signed quotes, the pinned
+SDK verifier, durable quote reservation and exactly one Stacks testnet broadcast attempt.
 
-Those operations remain disabled until their SDK dependency, replay rules, timeout behavior,
-external review and testnet evidence satisfy the release gates. Milestone 1 contracts and mainnet
-deployments are reused unchanged.
+Verification and settlement remain disabled by default. Even when enabled, `broadcast` and
+`pending` are explicitly unconfirmed: this release does **not** reconcile confirmations, deliver
+paid resources, sponsor fees or settle on mainnet. Milestone 1 contracts and mainnet deployments
+are reused unchanged.
 
 ## Architecture
 
@@ -36,16 +36,20 @@ database is dedicated to Nayori and must not reuse another PerkOS product databa
 |---|---|
 | `GET /health` | Process liveness; does not touch PostgreSQL |
 | `GET /ready` | PostgreSQL readiness; returns 503 when unavailable |
-| `GET /supported` | Truthful capability status; settlement and sponsorship are false |
+| `GET /supported` | Truthful capability and release-boundary status |
 | `GET /x402.json` | Machine-readable x402 foundation metadata |
 | `GET /.well-known/agent.json` | Agent discovery manifest |
 | `GET /.well-known/jwks.json` | Public Ed25519 quote-verification keys when issuance is enabled |
 | `GET /llms.txt` | Agent-readable usage and safety guidance |
 | `GET /openapi.json` | OpenAPI document containing only implemented routes |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
+| `POST /v1/x402/verify` | Authenticated verify-only check; never broadcasts |
+| `POST /v1/x402/settle` | Reserves and broadcasts once on testnet; returns unconfirmed state |
+| `GET /v1/x402/settlements/:id` | Merchant-isolated status for a reserved settlement |
 
-The quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. No placeholder
-`/verify` or `/settle` endpoint exists; an unknown payment route returns 404.
+Quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. Verify is absent unless
+`PAYMENT_VERIFICATION_ENABLED=true`; settle and status are absent unless
+`SETTLEMENT_ENABLED=true`. No placeholder capability is advertised.
 
 ## Requirements
 
@@ -88,7 +92,14 @@ See [`.env.example`](.env.example). Important fail-closed settings:
 - `QUOTE_MAX_TTL_SECONDS` cannot exceed five minutes.
 - `QUOTE_PREVIOUS_PUBLIC_JWKS_JSON` retains public keys briefly during rotation; private members
   are rejected.
-- `SETTLEMENT_ENABLED` accepts only `false` or `0` in this release.
+- `PAYMENT_VERIFICATION_ENABLED=true` requires quote issuance.
+- `SETTLEMENT_ENABLED=true` requires verification and is rejected unless the configured Stacks
+  network is testnet.
+- `STACKS_API_URL` selects the testnet broadcast origin; production mode requires HTTPS.
+- `STACKS_BROADCAST_TIMEOUT_MS` bounds the only broadcast attempt. Timeouts become `pending` and
+  are never blindly retried.
+- `PAYMENT_RATE_LIMIT_PER_MINUTE` bounds authenticated verify, settle and status operations per
+  merchant in each process; edge limits remain required for distributed abuse protection.
 - `SPONSORSHIP_ENABLED` accepts only `false` or `0` in this release.
 - `DATABASE_URL` must use `postgres://` or `postgresql://`.
 - `SERVICE_ORIGIN` controls canonical discovery URLs.
@@ -125,6 +136,7 @@ Migrations establish:
 - unique quote fingerprints and signed-token hashes;
 - one settlement per quote;
 - unique `(network, txid)` replay protection;
+- row-locked quote reservation before any external broadcast;
 - positive exact atomic amounts;
 - payment and delivery as separate states;
 - append-only settlement transitions;
@@ -140,21 +152,23 @@ Transaction parsing and economic verification belong in the public
 [`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins exact
 release `0.2.0`; it does not copy the SDK implementation.
 
-SDK 0.2.0 owns quote canonicalization, asset definitions, x402 requirements, fingerprints and the
-pure `stacks-signed-tx-v1` verifier. This Platform release uses only its quote primitives;
-settlement integration remains a separate review boundary.
+SDK 0.2.0 owns quote canonicalization, asset definitions, x402 requirements, fingerprints, origin
+signature validation and the pure `stacks-signed-tx-v1` verifier. This Platform release invokes
+that verifier, rejects sponsorship, compares the signed token to its issued database record and
+persists only normalized evidence and a raw-transaction digest before broadcasting.
 
 ## Planned PR sequence
 
 1. Foundation: truthful discovery, PostgreSQL, migration runner, Docker and CI — complete.
-2. Merchant authentication and signed, short-lived request quotes — this release.
-3. Pinned SDK verifier, durable reservation and testnet settlement.
+2. Merchant authentication and signed, short-lived request quotes — complete.
+3. Pinned SDK verifier, durable reservation and testnet broadcast — this release.
 4. Reconciliation worker, confirmation receipts and delivery ledger.
 5. Leather/headless examples and external clean-room quickstart.
 6. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
-and [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)
+[`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)
+and [`docs/plans/2026-08-27-testnet-settlement-design.md`](docs/plans/2026-08-27-testnet-settlement-design.md)
 for the approved designs and security boundaries.
 
 ## Milestone 2 alignment

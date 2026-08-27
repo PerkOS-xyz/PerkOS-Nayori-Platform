@@ -13,8 +13,9 @@ Do not test settlement behavior against mainnet, broadcast a transaction, access
 data or attempt persistence without explicit written authorization. Read-only reproduction and
 local/testnet fixtures are preferred.
 
-The current release may enable authenticated, request-bound quote issuance with external Ed25519
-signing material. A quote is not proof of payment. Verification, broadcast, settlement,
-sponsorship and resource delivery remain unavailable; treat any accidental appearance of those
-capabilities, private JWK output, plaintext merchant credential or credential-bearing log as a
-release-blocking issue.
+The current release may enable authenticated, request-bound quote issuance, verify-only checks and
+one testnet broadcast attempt after durable reservation. A quote, successful verification,
+`broadcast` state or `pending` state is not confirmed payment. Mainnet broadcast, reconciliation,
+confirmation, sponsorship and resource delivery remain unavailable. Treat any accidental
+appearance of those capabilities, private JWK output, plaintext merchant credential,
+transaction bytes at rest or credential-bearing log as a release-blocking issue.
