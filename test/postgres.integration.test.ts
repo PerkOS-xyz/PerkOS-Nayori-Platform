@@ -102,6 +102,83 @@ describe.skipIf(!runIntegration)("PostgreSQL merchant quote store", () => {
       await expect(
         database.findSettlementForMerchant("integration-settlement", "integration-merchant"),
       ).resolves.toMatchObject({ txid: reservationInput.txid, status: "pending" });
+
+      const claimedAt = new Date();
+      const leaseUntil = new Date(claimedAt.getTime() + 30_000);
+      const competingClaims = await Promise.all([
+        database.claimSettlementsForReconciliation(10, claimedAt, leaseUntil),
+        database.claimSettlementsForReconciliation(10, claimedAt, leaseUntil),
+      ]);
+      expect(competingClaims.map((claim) => claim.length).sort()).toEqual([0, 1]);
+
+      const claimed = await database.claimSettlementsForReconciliation(
+        10,
+        new Date(leaseUntil.getTime() + 1),
+        new Date(leaseUntil.getTime() + 30_001),
+      );
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]).toMatchObject({
+        settlementId: "integration-settlement",
+        audience: "merchant:integration",
+        amountAtomic: "1000",
+      });
+
+      await expect(
+        database.applyReconciliationResult({
+          outcome: "confirmed",
+          settlementId: "integration-settlement",
+          checkedAt: new Date(),
+          blockHeight: 100,
+          blockHash: `0x${"1".repeat(64)}`,
+          confirmations: 2,
+          receipt: {
+            receiptId: `nr_${"1".repeat(32)}`,
+            settlementId: "integration-settlement",
+            keyId: "integration-key",
+            payloadHash: "2".repeat(64),
+            tokenHash: "3".repeat(64),
+            signedToken: "integration-signed-receipt",
+            issuedAt: new Date(),
+          },
+          deliveryId: `nd_${"1".repeat(32)}`,
+          requestDigest: "4".repeat(64),
+          deliveryRetryExpiresAt: new Date(Date.now() + 60_000),
+        }),
+      ).resolves.toMatchObject({
+        status: "confirmed",
+        receiptId: `nr_${"1".repeat(32)}`,
+        deliveryStatus: "delivery_pending",
+      });
+
+      const firstClaim = await database.claimDelivery(
+        "integration-settlement",
+        "integration-merchant",
+        new Date(),
+      );
+      const secondClaim = await database.claimDelivery(
+        "integration-settlement",
+        "integration-merchant",
+        new Date(),
+      );
+      expect(firstClaim).toMatchObject({ status: "delivering", attemptCount: 1 });
+      expect(secondClaim).toMatchObject({ status: "delivering", attemptCount: 1 });
+
+      const responseDigest = "5".repeat(64);
+      const delivered = await database.completeDelivery(
+        "integration-settlement",
+        "integration-merchant",
+        responseDigest,
+        new Date(),
+      );
+      expect(delivered).toMatchObject({ status: "delivered", responseDigest });
+      await expect(
+        database.completeDelivery(
+          "integration-settlement",
+          "integration-merchant",
+          responseDigest,
+          new Date(),
+        ),
+      ).resolves.toMatchObject({ status: "delivered", attemptCount: 1 });
     } finally {
       await database.close();
     }

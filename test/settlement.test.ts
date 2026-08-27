@@ -11,6 +11,9 @@ import type { BroadcastResult, TransactionBroadcaster } from "../src/broadcast.j
 import { createApp } from "../src/app.js";
 import { loadConfig, type AppConfig } from "../src/config.js";
 import {
+  DeliveryStoreError,
+  type DeliveryLedgerRecord,
+  type DeliveryLedgerStore,
   SettlementStoreError,
   type IssuedQuoteRecord,
   type MerchantQuoteStore,
@@ -58,9 +61,10 @@ const merchant: MerchantRecord = {
   },
 };
 
-class MemoryStore implements MerchantQuoteStore, SettlementStore {
+class MemoryStore implements MerchantQuoteStore, SettlementStore, DeliveryLedgerStore {
   readonly quotes = new Map<string, StoredQuoteRecord>();
   readonly settlements = new Map<string, SettlementRecord>();
+  delivery: DeliveryLedgerRecord | null = null;
 
   constructor(readonly expectedApiKeyHash: string) {}
 
@@ -149,6 +153,56 @@ class MemoryStore implements MerchantQuoteStore, SettlementStore {
     const settlement = this.settlements.get(settlementId);
     return settlement?.merchantId === merchantId ? settlement : null;
   }
+
+  async claimDelivery(
+    settlementId: string,
+    merchantId: string,
+    _claimedAt: Date,
+  ): Promise<DeliveryLedgerRecord> {
+    void _claimedAt;
+    if (
+      !this.delivery ||
+      this.delivery.settlementId !== settlementId ||
+      this.delivery.merchantId !== merchantId
+    ) {
+      throw new DeliveryStoreError("delivery_not_found");
+    }
+    if (this.delivery.status === "delivery_pending") {
+      this.delivery = {
+        ...this.delivery,
+        status: "delivering",
+        attemptCount: this.delivery.attemptCount + 1,
+      };
+    }
+    return this.delivery;
+  }
+
+  async completeDelivery(
+    settlementId: string,
+    merchantId: string,
+    responseDigest: string,
+    _completedAt: Date,
+  ): Promise<DeliveryLedgerRecord> {
+    void _completedAt;
+    if (
+      !this.delivery ||
+      this.delivery.settlementId !== settlementId ||
+      this.delivery.merchantId !== merchantId
+    ) {
+      throw new DeliveryStoreError("delivery_not_found");
+    }
+    if (this.delivery.status === "delivered") {
+      if (this.delivery.responseDigest !== responseDigest) {
+        throw new DeliveryStoreError("delivery_digest_conflict");
+      }
+      return this.delivery;
+    }
+    if (this.delivery.status !== "delivering") {
+      throw new DeliveryStoreError("delivery_not_claimed");
+    }
+    this.delivery = { ...this.delivery, status: "delivered", responseDigest };
+    return this.delivery;
+  }
 }
 
 function verifiedPayment(overrides: Partial<NayoriX402VerifiedDirectPayment> = {}) {
@@ -174,6 +228,7 @@ function verifiedPayment(overrides: Partial<NayoriX402VerifiedDirectPayment> = {
 async function context(
   outcome: BroadcastResult = { outcome: "accepted", txid: TXID },
   paymentRateLimit = 60,
+  deliveryLedgerEnabled = false,
 ) {
   const { privateKey } = await generateKeyPair("EdDSA", {
     crv: "Ed25519",
@@ -194,6 +249,8 @@ async function context(
     PAYMENT_VERIFICATION_ENABLED: "true",
     PAYMENT_RATE_LIMIT_PER_MINUTE: String(paymentRateLimit),
     SETTLEMENT_ENABLED: "true",
+    RECONCILIATION_ENABLED: String(deliveryLedgerEnabled),
+    DELIVERY_LEDGER_ENABLED: String(deliveryLedgerEnabled),
     STACKS_NETWORK: "testnet",
   });
   const apiKey = generateMerchantApiKey();
@@ -223,6 +280,7 @@ async function context(
     broadcaster,
     verifier: verify,
     now: () => NOW + 10_000,
+    ...(deliveryLedgerEnabled ? { deliveryStore: store } : {}),
   });
   const input = {
     signedQuote: issued.response.signedQuote,
@@ -254,6 +312,29 @@ async function context(
 }
 
 describe("payment verification and testnet settlement", () => {
+  it("refuses unsafe settlement and delivery runtime wiring", async () => {
+    const settlement = await context();
+    expect(() =>
+      createSettlementService({
+        config: settlement.config,
+        store: settlement.store,
+        signer: settlement.signer,
+        verifier: settlement.verify,
+      }),
+    ).toThrow(/transaction broadcaster/i);
+
+    const delivery = await context({ outcome: "accepted", txid: TXID }, 60, true);
+    expect(() =>
+      createSettlementService({
+        config: delivery.config,
+        store: delivery.store,
+        signer: delivery.signer,
+        broadcaster: { broadcast: delivery.broadcast },
+        verifier: delivery.verify,
+      }),
+    ).toThrow(/delivery store/i);
+  });
+
   it("authenticates the merchant and verifies without reserving or broadcasting", async () => {
     const test = await context();
     const verification = await test.service.verify(`Bearer ${test.apiKey}`, test.input);
@@ -416,5 +497,103 @@ describe("payment verification and testnet settlement", () => {
       paths: Record<string, unknown>;
     };
     expect(openapi.paths).toHaveProperty("/v1/x402/settle");
+  });
+
+  it("claims and completes a confirmed delivery idempotently", async () => {
+    const test = await context({ outcome: "accepted", txid: TXID }, 60, true);
+    const settlementId = `ns_${"1".repeat(32)}`;
+    test.store.delivery = {
+      deliveryId: `nd_${"1".repeat(32)}`,
+      settlementId,
+      merchantId: "merchant-1",
+      status: "delivery_pending",
+      attemptCount: 0,
+      responseDigest: null,
+      retryExpiresAt: new Date(NOW + 60_000),
+      receiptId: `nr_${"1".repeat(32)}`,
+      receiptToken: "signed-receipt",
+    };
+
+    const firstClaim = await test.service.claimDelivery(`Bearer ${test.apiKey}`, settlementId);
+    const secondClaim = await test.service.claimDelivery(`Bearer ${test.apiKey}`, settlementId);
+    expect(firstClaim).toMatchObject({
+      deliveryId: `nd_${"1".repeat(32)}`,
+      status: "delivering",
+      attemptCount: 1,
+      receipt: "signed-receipt",
+    });
+    expect(secondClaim).toEqual(firstClaim);
+
+    const digest = "c".repeat(64);
+    const completed = await test.service.completeDelivery(
+      `Bearer ${test.apiKey}`,
+      settlementId,
+      digest,
+    );
+    await expect(
+      test.service.completeDelivery(`Bearer ${test.apiKey}`, settlementId, digest),
+    ).resolves.toEqual(completed);
+    await expect(
+      test.service.completeDelivery(`Bearer ${test.apiKey}`, settlementId, "d".repeat(64)),
+    ).rejects.toMatchObject({ code: "delivery_digest_conflict", status: 409 });
+  });
+
+  it("exposes authenticated delivery ledger routes only when enabled", async () => {
+    const test = await context({ outcome: "accepted", txid: TXID }, 60, true);
+    const settlementId = `ns_${"2".repeat(32)}`;
+    test.store.delivery = {
+      deliveryId: `nd_${"2".repeat(32)}`,
+      settlementId,
+      merchantId: "merchant-1",
+      status: "delivery_pending",
+      attemptCount: 0,
+      responseDigest: null,
+      retryExpiresAt: new Date(NOW + 60_000),
+      receiptId: `nr_${"2".repeat(32)}`,
+      receiptToken: "signed-receipt",
+    };
+    const app = createApp({
+      config: test.config,
+      database: test.store,
+      logger: { info() {}, error() {} },
+      quoteService: test.quoteService,
+      settlementService: test.service,
+    });
+    const authorization = { authorization: `Bearer ${test.apiKey}` };
+
+    expect(
+      (await app.request(`/v1/x402/settlements/${settlementId}/delivery/claim`, { method: "POST" }))
+        .status,
+    ).toBe(401);
+    expect(
+      (
+        await app.request(`/v1/x402/settlements/${settlementId}/delivery/claim`, {
+          method: "POST",
+          headers: authorization,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await app.request(`/v1/x402/settlements/${settlementId}/delivery/complete`, {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({ responseDigest: "invalid" }),
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(`/v1/x402/settlements/${settlementId}/delivery/complete`, {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({ responseDigest: "e".repeat(64) }),
+        })
+      ).status,
+    ).toBe(200);
+    const openapi = (await (await app.request("/openapi.json")).json()) as {
+      paths: Record<string, unknown>;
+    };
+    expect(openapi.paths).toHaveProperty("/v1/x402/settlements/{id}/delivery/claim");
   });
 });

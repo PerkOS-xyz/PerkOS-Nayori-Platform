@@ -31,6 +31,7 @@ export type CreateAppOptions = {
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+const SHA256_DIGEST = /^[0-9a-f]{64}$/;
 
 function errorBody(code: string, message: string, requestId: string) {
   return { error: { code, message, requestId } } as const;
@@ -282,6 +283,100 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
           );
         }
       });
+
+      if (config.deliveryLedgerEnabled) {
+        app.post("/v1/x402/settlements/:id/delivery/claim", async (context) => {
+          try {
+            const delivery = await settlementService.claimDelivery(
+              context.req.header("authorization"),
+              context.req.param("id"),
+            );
+            logger.info({
+              event: "delivery_claimed",
+              requestId: context.get("requestId"),
+              settlementId: delivery.settlementId,
+              deliveryId: delivery.deliveryId,
+              status: delivery.status,
+            });
+            return context.json({ delivery });
+          } catch (error) {
+            if (!(error instanceof SettlementServiceError)) throw error;
+            if (error.status === 401) {
+              context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+            }
+            if (error.status === 429 && error.retryAfterSeconds) {
+              context.header("retry-after", String(error.retryAfterSeconds));
+            }
+            return context.json(
+              errorBody(error.code, error.publicMessage, context.get("requestId")),
+              error.status,
+            );
+          }
+        });
+
+        app.post("/v1/x402/settlements/:id/delivery/complete", async (context) => {
+          let input: unknown;
+          try {
+            input = await context.req.json();
+          } catch {
+            return context.json(
+              errorBody(
+                "invalid_request",
+                "The delivery completion must be valid JSON.",
+                context.get("requestId"),
+              ),
+              400,
+            );
+          }
+          const responseDigest =
+            typeof input === "object" &&
+            input !== null &&
+            !Array.isArray(input) &&
+            Object.keys(input).length === 1 &&
+            "responseDigest" in input &&
+            typeof input.responseDigest === "string" &&
+            SHA256_DIGEST.test(input.responseDigest)
+              ? input.responseDigest
+              : null;
+          if (!responseDigest) {
+            return context.json(
+              errorBody(
+                "invalid_request",
+                "responseDigest must be a lowercase SHA-256 digest.",
+                context.get("requestId"),
+              ),
+              400,
+            );
+          }
+          try {
+            const delivery = await settlementService.completeDelivery(
+              context.req.header("authorization"),
+              context.req.param("id"),
+              responseDigest,
+            );
+            logger.info({
+              event: "delivery_completed",
+              requestId: context.get("requestId"),
+              settlementId: delivery.settlementId,
+              deliveryId: delivery.deliveryId,
+              responseDigest,
+            });
+            return context.json({ delivery });
+          } catch (error) {
+            if (!(error instanceof SettlementServiceError)) throw error;
+            if (error.status === 401) {
+              context.header("www-authenticate", 'Bearer realm="nayori-settlement"');
+            }
+            if (error.status === 429 && error.retryAfterSeconds) {
+              context.header("retry-after", String(error.retryAfterSeconds));
+            }
+            return context.json(
+              errorBody(error.code, error.publicMessage, context.get("requestId")),
+              error.status,
+            );
+          }
+        });
+      }
     }
   }
 

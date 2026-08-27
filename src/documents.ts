@@ -3,9 +3,11 @@ import { STACKS_X402_NETWORKS } from "@perkos/agent-sdk";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.3.0";
+export const SERVICE_VERSION = "0.4.0";
 
 function serviceStatus(config: AppConfig) {
+  if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
+  if (config.reconciliationEnabled) return "testnet-confirmation-ready";
   if (config.settlementEnabled) return "testnet-settlement-broadcast";
   if (config.paymentVerificationEnabled) return "verification-ready";
   if (config.quoteIssuanceEnabled) return "quote-ready";
@@ -22,8 +24,9 @@ export function createSupportedDocument(config: AppConfig) {
     quoteIssuanceEnabled: config.quoteIssuanceEnabled,
     paymentVerificationEnabled: config.paymentVerificationEnabled,
     settlementEnabled: config.settlementEnabled,
-    confirmationEnabled: false,
-    deliveryEnabled: false,
+    confirmationEnabled: config.reconciliationEnabled,
+    deliveryLedgerEnabled: config.deliveryLedgerEnabled,
+    resourceDeliveryMode: config.deliveryLedgerEnabled ? "merchant-idempotent" : "unavailable",
     sponsorshipEnabled: config.sponsorshipEnabled,
     networks: config.quoteIssuanceEnabled ? [STACKS_X402_NETWORKS[config.stacksNetwork]] : [],
     mechanisms: config.quoteIssuanceEnabled
@@ -33,7 +36,11 @@ export function createSupportedDocument(config: AppConfig) {
             assetTransferMethod: "stacks-signed-tx-v1",
             paymentFlow: "upfront",
             assets: ["STX", "sBTC", "USDCx"],
-            settlement: config.settlementEnabled ? "broadcast-only-confirmation-pending" : false,
+            settlement: config.reconciliationEnabled
+              ? "confirmed-after-canonical-depth"
+              : config.settlementEnabled
+                ? "broadcast-only-confirmation-pending"
+                : false,
           },
         ]
       : [],
@@ -56,8 +63,10 @@ export function createAgentDocument(config: AppConfig) {
     network: config.stacksNetwork,
     authorization: {
       reads: "public discovery only",
-      writes: config.settlementEnabled
-        ? "merchant bearer authentication for quote, verification and testnet broadcast operations"
+      writes: config.deliveryLedgerEnabled
+        ? "merchant bearer authentication for quote, settlement status and delivery-ledger operations"
+        : config.settlementEnabled
+          ? "merchant bearer authentication for quote, verification and testnet broadcast operations"
         : config.paymentVerificationEnabled
           ? "merchant bearer authentication for quote and verify-only operations"
           : config.quoteIssuanceEnabled
@@ -82,8 +91,9 @@ export function createAgentDocument(config: AppConfig) {
       quote: config.quoteIssuanceEnabled,
       verify: config.paymentVerificationEnabled,
       settle: config.settlementEnabled,
-      confirmation: false,
-      delivery: false,
+      confirmation: config.reconciliationEnabled,
+      deliveryLedger: config.deliveryLedgerEnabled,
+      resourceDelivery: config.deliveryLedgerEnabled ? "merchant-owned" : false,
       sponsorship: false,
     },
   } as const;
@@ -204,13 +214,53 @@ export function createOpenApiDocument(config: AppConfig) {
     };
   }
 
+  if (config.deliveryLedgerEnabled) {
+    paths["/v1/x402/settlements/{id}/delivery/claim"] = {
+      post: {
+        operationId: "claimConfirmedDelivery",
+        security: [{ merchantBearer: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "Returns the stable delivery ID and signed confirmation receipt" },
+          "401": { description: "Authentication failed" },
+          "404": { description: "Delivery not found" },
+          "409": { description: "Settlement or delivery is not claimable" },
+          "429": { description: "Rate limit exceeded" },
+        },
+      },
+    };
+    paths["/v1/x402/settlements/{id}/delivery/complete"] = {
+      post: {
+        operationId: "completeConfirmedDelivery",
+        security: [{ merchantBearer: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        responses: {
+          "200": { description: "Records an idempotent delivered-response digest" },
+          "400": { description: "The response digest is invalid" },
+          "401": { description: "Authentication failed" },
+          "404": { description: "Delivery not found" },
+          "409": { description: "Delivery state or digest conflicts" },
+          "429": { description: "Rate limit exceeded" },
+        },
+      },
+    };
+  }
+
   return {
     openapi: "3.1.0",
     info: {
       title: "Nayori x402 Facilitator API",
       version: SERVICE_VERSION,
-      description: config.settlementEnabled
-        ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
+      description: config.deliveryLedgerEnabled
+        ? "Issues quotes, settles on testnet, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger."
+        : config.reconciliationEnabled
+          ? "Issues quotes, settles on testnet and reconciles canonical confirmations into signed receipts."
+          : config.settlementEnabled
+            ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
         : config.paymentVerificationEnabled
           ? "Issues authenticated quotes and verifies payments without broadcasting or delivery."
           : config.quoteIssuanceEnabled
@@ -242,19 +292,27 @@ Network target: ${config.stacksNetwork}
 Quote issuance enabled: ${config.quoteIssuanceEnabled}
 Payment verification enabled: ${config.paymentVerificationEnabled}
 Settlement enabled: ${config.settlementEnabled}
+Reconciliation enabled: ${config.reconciliationEnabled}
+Minimum confirmations: ${config.settlementMinConfirmations}
+Delivery ledger enabled: ${config.deliveryLedgerEnabled}
 Sponsorship enabled: false
 
 ${
-  config.settlementEnabled
-    ? "Authenticated merchants may issue quotes, verify standard direct payments and request one testnet broadcast. Broadcast and pending states are not confirmation. Reconciliation, sponsorship and resource delivery are unavailable."
+  config.deliveryLedgerEnabled
+    ? "Authenticated merchants may settle on testnet, receive a signed receipt after canonical confirmation depth and use a stable delivery ID. The merchant resource server performs and deduplicates resource delivery; Nayori does not proxy arbitrary URLs."
+    : config.reconciliationEnabled
+      ? "Authenticated merchants may settle on testnet and receive a signed receipt only after canonical confirmation depth. Resource delivery and sponsorship are unavailable."
+      : config.settlementEnabled
+        ? "Authenticated merchants may issue quotes, verify standard direct payments and request one testnet broadcast. Broadcast and pending states are not confirmation. Reconciliation, sponsorship and resource delivery are unavailable."
     : config.paymentVerificationEnabled
       ? "Authenticated merchants may issue quotes and verify standard direct payments. Verification does not broadcast, confirm, settle or deliver a resource."
       : config.quoteIssuanceEnabled
         ? "Authenticated merchants may issue short-lived request-bound quotes. This release does not verify payments, broadcast transactions, settle payments, sponsor fees or deliver paid resources."
     : "This release exposes discovery and health endpoints only. It does not issue quotes, verify payments, broadcast transactions, settle payments, sponsor fees or deliver paid resources."
 }
-Never treat quote issuance, verify-only or a broadcast response as confirmed payment. Confirmation
-and resource delivery remain unavailable in this release.
+Never treat quote issuance, verify-only or a broadcast response as confirmed payment. Only a
+signed receipt emitted after canonical confirmation depth proves settlement. The merchant owns
+resource delivery and must deduplicate it by delivery ID.
 
 SDK: https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK
 Product: https://nayori.ai

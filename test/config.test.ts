@@ -17,6 +17,9 @@ describe("loadConfig", () => {
     expect(config.paymentVerificationEnabled).toBe(false);
     expect(config.paymentRateLimitPerMinute).toBe(60);
     expect(config.settlementEnabled).toBe(false);
+    expect(config.reconciliationEnabled).toBe(false);
+    expect(config.deliveryLedgerEnabled).toBe(false);
+    expect(config.settlementMinConfirmations).toBe(1);
     expect(config.sponsorshipEnabled).toBe(false);
     expect(config.port).toBe(8080);
   });
@@ -107,5 +110,41 @@ describe("loadConfig", () => {
     expect(config.paymentVerificationEnabled).toBe(true);
     expect(config.settlementEnabled).toBe(true);
     expect(config.stacksApiUrl).toBe("https://api.testnet.hiro.so");
+  });
+
+  it("requires settlement before reconciliation and reconciliation before delivery", () => {
+    expect(() =>
+      loadConfig({ ...REQUIRED_ENVIRONMENT, RECONCILIATION_ENABLED: "true" }),
+    ).toThrow(/requires testnet settlement/i);
+
+    const settlement = {
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+      PAYMENT_VERIFICATION_ENABLED: "true",
+      SETTLEMENT_ENABLED: "true",
+    };
+    expect(() =>
+      loadConfig({ ...settlement, DELIVERY_LEDGER_ENABLED: "true" }),
+    ).toThrow(/requires reconciliation/i);
+  });
+
+  it("accepts bounded reconciliation and delivery configuration", () => {
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+      PAYMENT_VERIFICATION_ENABLED: "true",
+      SETTLEMENT_ENABLED: "true",
+      RECONCILIATION_ENABLED: "true",
+      DELIVERY_LEDGER_ENABLED: "true",
+      SETTLEMENT_MIN_CONFIRMATIONS: "2",
+      RECONCILIATION_BATCH_SIZE: "10",
+    });
+
+    expect(config.reconciliationEnabled).toBe(true);
+    expect(config.deliveryLedgerEnabled).toBe(true);
+    expect(config.settlementMinConfirmations).toBe(2);
+    expect(config.reconciliationBatchSize).toBe(10);
   });
 });

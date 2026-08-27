@@ -15,6 +15,9 @@ import type { TransactionBroadcaster } from "./broadcast.js";
 import type { AppConfig } from "./config.js";
 import {
   SettlementStoreError,
+  DeliveryStoreError,
+  type DeliveryLedgerRecord,
+  type DeliveryLedgerStore,
   type MerchantQuoteStore,
   type SettlementRecord,
   type SettlementStore,
@@ -32,6 +35,7 @@ const SDK_VERIFIER_CHECKSUM = createHash("sha256")
   .digest("hex");
 
 const settlementIdSchema = z.string().regex(/^ns_[0-9a-f]{32}$/);
+const responseDigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const paymentRequestSchema = z
   .object({
     signedQuote: z.string().min(1).max(16_384),
@@ -87,8 +91,25 @@ export type PublicSettlement = {
   readonly broadcastAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly confirmed: false;
-  readonly deliveryAvailable: false;
+  readonly confirmed: boolean;
+  readonly receipt: string | null;
+  readonly deliveryAvailable: boolean;
+  readonly delivery: {
+    readonly deliveryId: string;
+    readonly status: string;
+    readonly responseDigest: string | null;
+  } | null;
+};
+
+export type PublicDelivery = {
+  readonly deliveryId: string;
+  readonly settlementId: string;
+  readonly status: string;
+  readonly attemptCount: number;
+  readonly responseDigest: string | null;
+  readonly retryExpiresAt: string;
+  readonly receiptId: string;
+  readonly receipt: string;
 };
 
 export type SettlementResult = {
@@ -103,6 +124,15 @@ export type SettlementService = {
     authorization: string | undefined,
     settlementId: string,
   ): Promise<PublicSettlement>;
+  claimDelivery(
+    authorization: string | undefined,
+    settlementId: string,
+  ): Promise<PublicDelivery>;
+  completeDelivery(
+    authorization: string | undefined,
+    settlementId: string,
+    responseDigest: string,
+  ): Promise<PublicDelivery>;
 };
 
 type PaymentVerifier = typeof verifyNayoriX402DirectPayment;
@@ -122,7 +152,15 @@ function unauthorized(): SettlementServiceError {
   );
 }
 
-function publicSettlement(record: SettlementRecord): PublicSettlement {
+function publicSettlement(record: SettlementRecord, deliveryEnabled: boolean): PublicSettlement {
+  const delivery =
+    record.deliveryId && record.deliveryStatus
+      ? {
+          deliveryId: record.deliveryId,
+          status: record.deliveryStatus,
+          responseDigest: record.responseDigest ?? null,
+        }
+      : null;
   return {
     settlementId: record.settlementId,
     quoteId: record.quoteId,
@@ -135,8 +173,26 @@ function publicSettlement(record: SettlementRecord): PublicSettlement {
     broadcastAt: record.broadcastAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
-    confirmed: false,
-    deliveryAvailable: false,
+    confirmed: record.status === "confirmed",
+    receipt: record.receiptToken ?? null,
+    deliveryAvailable:
+      deliveryEnabled &&
+      record.status === "confirmed" &&
+      (record.deliveryStatus === "delivery_pending" || record.deliveryStatus === "delivering"),
+    delivery,
+  };
+}
+
+function publicDelivery(record: DeliveryLedgerRecord): PublicDelivery {
+  return {
+    deliveryId: record.deliveryId,
+    settlementId: record.settlementId,
+    status: record.status,
+    attemptCount: record.attemptCount,
+    responseDigest: record.responseDigest,
+    retryExpiresAt: record.retryExpiresAt.toISOString(),
+    receiptId: record.receiptId,
+    receipt: record.receiptToken,
   };
 }
 
@@ -177,8 +233,15 @@ export function createSettlementService(options: {
   readonly verifier?: PaymentVerifier;
   readonly now?: () => number;
   readonly rateLimiter?: FixedWindowRateLimiter;
+  readonly deliveryStore?: DeliveryLedgerStore;
 }): SettlementService {
-  const { config, store, signer, broadcaster } = options;
+  const { config, store, signer, broadcaster, deliveryStore } = options;
+  if (config.settlementEnabled && !broadcaster) {
+    throw new Error("Settlement is enabled without a transaction broadcaster.");
+  }
+  if (config.deliveryLedgerEnabled && !deliveryStore) {
+    throw new Error("The delivery ledger is enabled without a delivery store.");
+  }
   const verifier = options.verifier ?? verifyNayoriX402DirectPayment;
   const now = options.now ?? (() => Date.now());
   const rateLimiter =
@@ -314,7 +377,7 @@ export function createSettlementService(options: {
 
     async settle(authorization, input) {
       if (!broadcaster) {
-        throw new Error("Settlement is enabled without a transaction broadcaster.");
+        throw new Error("Settlement is not enabled.");
       }
       const validated = await validate(authorization, input, true);
       let reservation;
@@ -344,7 +407,10 @@ export function createSettlementService(options: {
         throw error;
       }
       if (!reservation.created) {
-        return { settlement: publicSettlement(reservation.settlement), replayed: true };
+        return {
+          settlement: publicSettlement(reservation.settlement, config.deliveryLedgerEnabled),
+          replayed: true,
+        };
       }
 
       const attemptedAt = new Date(now());
@@ -368,7 +434,10 @@ export function createSettlementService(options: {
         reason,
         attemptedAt,
       );
-      return { settlement: publicSettlement(updated), replayed: false };
+      return {
+        settlement: publicSettlement(updated, config.deliveryLedgerEnabled),
+        replayed: false,
+      };
     },
 
     async get(authorization, settlementId) {
@@ -380,7 +449,78 @@ export function createSettlementService(options: {
       if (!settlement) {
         throw new SettlementServiceError("settlement_not_found", "Settlement not found.", 404);
       }
-      return publicSettlement(settlement);
+      return publicSettlement(settlement, config.deliveryLedgerEnabled);
+    },
+
+    async claimDelivery(authorization, settlementId) {
+      const merchant = await authenticate(authorization);
+      if (!deliveryStore || !config.deliveryLedgerEnabled) {
+        throw new Error("The delivery ledger is not enabled.");
+      }
+      if (!settlementIdSchema.safeParse(settlementId).success) {
+        throw new SettlementServiceError("delivery_not_found", "Delivery not found.", 404);
+      }
+      try {
+        const delivery = await deliveryStore.claimDelivery(
+          settlementId,
+          merchant.merchantId,
+          new Date(now()),
+        );
+        if (delivery.status === "expired") {
+          throw new SettlementServiceError(
+            "delivery_expired",
+            "The delivery claim window has expired.",
+            409,
+          );
+        }
+        return publicDelivery(delivery);
+      } catch (error) {
+        if (error instanceof SettlementServiceError) throw error;
+        if (!(error instanceof DeliveryStoreError)) throw error;
+        throw new SettlementServiceError(
+          error.code,
+          error.code === "delivery_not_found"
+            ? "Delivery not found."
+            : "The delivery cannot be claimed in its current state.",
+          error.code === "delivery_not_found" ? 404 : 409,
+        );
+      }
+    },
+
+    async completeDelivery(authorization, settlementId, responseDigest) {
+      const merchant = await authenticate(authorization);
+      if (!deliveryStore || !config.deliveryLedgerEnabled) {
+        throw new Error("The delivery ledger is not enabled.");
+      }
+      if (!settlementIdSchema.safeParse(settlementId).success) {
+        throw new SettlementServiceError("delivery_not_found", "Delivery not found.", 404);
+      }
+      if (!responseDigestSchema.safeParse(responseDigest).success) {
+        throw new SettlementServiceError(
+          "invalid_request",
+          "responseDigest must be a lowercase SHA-256 digest.",
+          400,
+        );
+      }
+      try {
+        return publicDelivery(
+          await deliveryStore.completeDelivery(
+            settlementId,
+            merchant.merchantId,
+            responseDigest,
+            new Date(now()),
+          ),
+        );
+      } catch (error) {
+        if (!(error instanceof DeliveryStoreError)) throw error;
+        throw new SettlementServiceError(
+          error.code,
+          error.code === "delivery_not_found"
+            ? "Delivery not found."
+            : "The delivery cannot be completed with this digest or state.",
+          error.code === "delivery_not_found" ? 404 : 409,
+        );
+      }
     },
   };
 }
