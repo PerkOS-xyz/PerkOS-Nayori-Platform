@@ -218,6 +218,7 @@ function verifiedPayment(overrides: Partial<NayoriX402VerifiedDirectPayment> = {
     transactionHash: TXID,
     transactionId: TXID,
     originNonce: 1n,
+    originFee: 300n,
     sponsored: false,
     quoteId: "placeholder",
     quoteFingerprint: `ny1_${"a".repeat(27)}`,
@@ -423,6 +424,10 @@ describe("payment verification and testnet settlement", () => {
     expect(second).toMatchObject({
       replayed: true,
       settlement: { settlementId: first.settlement.settlementId, status: "broadcast" },
+    });
+    expect([...test.store.settlements.values()][0]).toMatchObject({
+      verifierVersion: "@perkos/agent-sdk@0.3.0",
+      verifierChecksum: "60318a1fc799cea743e421ad76540096fdfe79dad02450aafc31235c223b7efe",
     });
     expect(test.broadcast).toHaveBeenCalledTimes(1);
   });
