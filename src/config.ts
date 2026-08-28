@@ -48,6 +48,19 @@ const publicResourceUrlSchema = z.url().superRefine((value, context) => {
   }
 });
 
+const mppResourceUrlSchema = z.url().superRefine((value, context) => {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    context.addIssue({ code: "custom", message: "MPP_RESOURCE_URL must use HTTP or HTTPS." });
+  }
+  if (parsed.search || parsed.hash) {
+    context.addIssue({
+      code: "custom",
+      message: "MPP_RESOURCE_URL must not contain a query string or fragment.",
+    });
+  }
+});
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -93,6 +106,12 @@ const environmentSchema = z
       .string()
       .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/)
       .default("nayori-capability-report"),
+    MPP_RESOURCE_ENABLED: booleanFlag,
+    MPP_RESOURCE_URL: mppResourceUrlSchema.default("https://nayori.ai/api/mpp/v1"),
+    MPP_RESOURCE_ROUTE_ID: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/)
+      .default("nayori-mpp-usdcx-report"),
     FACILITATOR_ORIGIN: httpUrlSchema.default("https://facilitator.nayori.ai"),
     FACILITATOR_MERCHANT_API_KEY: merchantApiKeySchema.optional(),
     FACILITATOR_REQUEST_TIMEOUT_MS: z.coerce
@@ -200,23 +219,35 @@ const environmentSchema = z
         message: "The MCP endpoint requires OAuth.",
       });
     }
-    if (value.PUBLIC_RESOURCE_ENABLED && !value.FACILITATOR_MERCHANT_API_KEY) {
+    if (
+      (value.PUBLIC_RESOURCE_ENABLED || value.MPP_RESOURCE_ENABLED) &&
+      !value.FACILITATOR_MERCHANT_API_KEY
+    ) {
       context.addIssue({
         code: "custom",
         path: ["FACILITATOR_MERCHANT_API_KEY"],
-        message: "The public paid resource requires a facilitator merchant API key.",
+        message: "A public paid resource requires a facilitator merchant API key.",
       });
     }
-    if (value.PUBLIC_RESOURCE_ENABLED) {
-      const publicResource = new URL(value.PUBLIC_RESOURCE_URL);
+    if (value.PUBLIC_RESOURCE_ENABLED || value.MPP_RESOURCE_ENABLED) {
       const facilitator = new URL(value.FACILITATOR_ORIGIN);
       const service = new URL(value.SERVICE_ORIGIN);
-      if (publicResource.origin === facilitator.origin) {
-        context.addIssue({
-          code: "custom",
-          path: ["FACILITATOR_ORIGIN"],
-          message: "The public resource and facilitator must use distinct origins.",
-        });
+      const resources = [
+        ...(value.PUBLIC_RESOURCE_ENABLED
+          ? [["PUBLIC_RESOURCE_URL", value.PUBLIC_RESOURCE_URL] as const]
+          : []),
+        ...(value.MPP_RESOURCE_ENABLED
+          ? [["MPP_RESOURCE_URL", value.MPP_RESOURCE_URL] as const]
+          : []),
+      ];
+      for (const [, url] of resources) {
+        if (new URL(url).origin === facilitator.origin) {
+          context.addIssue({
+            code: "custom",
+            path: ["FACILITATOR_ORIGIN"],
+            message: "The public resource and facilitator must use distinct origins.",
+          });
+        }
       }
       if (service.origin === facilitator.origin) {
         context.addIssue({
@@ -227,9 +258,9 @@ const environmentSchema = z
       }
       if (value.NODE_ENV === "production") {
         for (const [field, url] of [
-          ["PUBLIC_RESOURCE_URL", value.PUBLIC_RESOURCE_URL],
-          ["FACILITATOR_ORIGIN", value.FACILITATOR_ORIGIN],
-        ] as const) {
+          ...resources,
+          ["FACILITATOR_ORIGIN", value.FACILITATOR_ORIGIN] as const,
+        ]) {
           if (new URL(url).protocol !== "https:") {
             context.addIssue({
               code: "custom",
@@ -294,6 +325,9 @@ export type AppConfig = {
   readonly publicResourceEnabled: boolean;
   readonly publicResourceUrl: string;
   readonly publicResourceRouteId: string;
+  readonly mppResourceEnabled: boolean;
+  readonly mppResourceUrl: string;
+  readonly mppResourceRouteId: string;
   readonly facilitatorOrigin: string;
   readonly facilitatorMerchantApiKey?: string;
   readonly facilitatorRequestTimeoutMs: number;
@@ -348,6 +382,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     publicResourceEnabled: value.PUBLIC_RESOURCE_ENABLED,
     publicResourceUrl: value.PUBLIC_RESOURCE_URL,
     publicResourceRouteId: value.PUBLIC_RESOURCE_ROUTE_ID,
+    mppResourceEnabled: value.MPP_RESOURCE_ENABLED,
+    mppResourceUrl: value.MPP_RESOURCE_URL,
+    mppResourceRouteId: value.MPP_RESOURCE_ROUTE_ID,
     facilitatorOrigin: value.FACILITATOR_ORIGIN.replace(/\/$/, ""),
     facilitatorMerchantApiKey: value.FACILITATOR_MERCHANT_API_KEY,
     facilitatorRequestTimeoutMs: value.FACILITATOR_REQUEST_TIMEOUT_MS,

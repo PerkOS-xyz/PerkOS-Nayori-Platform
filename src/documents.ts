@@ -1,10 +1,10 @@
-import { STACKS_X402_NETWORKS } from "@perkos/agent-sdk";
+import { STACKS_X402_NETWORKS, getNayoriX402Asset } from "@perkos/agent-sdk";
 
 import { oauthScopes } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.6.0";
+export const SERVICE_VERSION = "0.7.0";
 
 function oauthIssuer(config: AppConfig): string {
   return config.oauthMode === "external" ? config.oauthIssuerOrigin : config.serviceOrigin;
@@ -19,6 +19,8 @@ function oauthJwks(config: AppConfig): string {
 }
 
 function serviceStatus(config: AppConfig) {
+  if (config.publicResourceEnabled && config.mppResourceEnabled) return "public-multi-protocol-resource";
+  if (config.mppResourceEnabled) return "public-mpp-resource";
   if (config.publicResourceEnabled) return "public-x402-resource";
   if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
   if (config.reconciliationEnabled) return "testnet-confirmation-ready";
@@ -52,18 +54,32 @@ export function createSupportedDocument(config: AppConfig) {
           settlement: "asynchronous-confirmation",
         }
       : null,
-    resourceDeliveryMode: config.publicResourceEnabled
+    mppResourceEnabled: config.mppResourceEnabled,
+    mppResource: config.mppResourceEnabled
+      ? {
+          url: config.mppResourceUrl,
+          facilitator: config.facilitatorOrigin,
+          method: "usdc",
+          intent: "charge",
+          type: "stacks",
+          asset: "USDCx",
+          settlement: "asynchronous-confirmation",
+        }
+      : null,
+    resourceDeliveryMode: config.publicResourceEnabled || config.mppResourceEnabled
       ? "facilitator-backed-idempotent"
       : config.deliveryLedgerEnabled
         ? "merchant-idempotent"
         : "unavailable",
     sponsorshipEnabled: config.sponsorshipEnabled,
-    networks: config.quoteIssuanceEnabled || config.publicResourceEnabled
+    networks: config.quoteIssuanceEnabled || config.publicResourceEnabled || config.mppResourceEnabled
       ? [STACKS_X402_NETWORKS[config.stacksNetwork]]
       : [],
-    mechanisms: config.quoteIssuanceEnabled || config.publicResourceEnabled
-      ? [
+    mechanisms: [
+      ...(config.quoteIssuanceEnabled || config.publicResourceEnabled
+        ? [
           {
+            protocol: "x402",
             scheme: "exact",
             assetTransferMethod: "stacks-signed-tx-v1",
             paymentFlow: "upfront",
@@ -75,7 +91,21 @@ export function createSupportedDocument(config: AppConfig) {
                 : false,
           },
         ]
-      : [],
+        : []),
+      ...(config.mppResourceEnabled
+        ? [
+            {
+              protocol: "mpp-paymentauth",
+              method: "usdc",
+              intent: "charge",
+              type: "stacks",
+              asset: "USDCx",
+              sponsorship: false,
+              settlement: "confirmed-after-canonical-depth",
+            },
+          ]
+        : []),
+    ],
     roadmap: {
       testNetwork: config.stacksNetwork,
       mechanism: "stacks-signed-tx-v1",
@@ -87,8 +117,8 @@ export function createSupportedDocument(config: AppConfig) {
 export function createAgentDocument(config: AppConfig) {
   return {
     schemaVersion: "1.0",
-    type: "x402-facilitator",
-    name: "Nayori x402 Facilitator",
+    type: "agent-commerce-facilitator",
+    name: "Nayori Commerce Facilitator",
     provider: { name: "PerkOS", url: "https://perkos.xyz" },
     status: serviceStatus(config),
     homepage: config.serviceOrigin,
@@ -127,7 +157,11 @@ export function createAgentDocument(config: AppConfig) {
         ? `${config.serviceOrigin}/.well-known/mcp/server-card.json`
         : null,
       paidResource: config.publicResourceEnabled ? config.publicResourceUrl : null,
-      facilitator: config.publicResourceEnabled ? config.facilitatorOrigin : null,
+      mppPaidResource: config.mppResourceEnabled ? config.mppResourceUrl : null,
+      facilitator:
+        config.publicResourceEnabled || config.mppResourceEnabled
+          ? config.facilitatorOrigin
+          : null,
       sdk: "https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK",
     },
     availability: {
@@ -137,7 +171,7 @@ export function createAgentDocument(config: AppConfig) {
       settle: config.settlementEnabled,
       confirmation: config.reconciliationEnabled,
       deliveryLedger: config.deliveryLedgerEnabled,
-      resourceDelivery: config.publicResourceEnabled
+      resourceDelivery: config.publicResourceEnabled || config.mppResourceEnabled
         ? "facilitator-backed"
         : config.deliveryLedgerEnabled
           ? "merchant-owned"
@@ -147,6 +181,7 @@ export function createAgentDocument(config: AppConfig) {
       partnerRegistration: config.partnerRegistrationEnabled,
       mcp: config.mcpEnabled,
       publicPaidResource: config.publicResourceEnabled,
+      mppPaymentAuth: config.mppResourceEnabled,
     },
   } as const;
 }
@@ -221,6 +256,8 @@ export function createMcpServerCard(config: AppConfig) {
 }
 
 export function createOpenApiDocument(config: AppConfig) {
+  const mppAsset = getNayoriX402Asset(config.stacksNetwork, "usdcx");
+  const mppCurrency = mppAsset.postConditionAsset ?? mppAsset.canonicalAssetId;
   const jsonResponse = {
     "200": {
       description: "Successful response",
@@ -291,6 +328,60 @@ export function createOpenApiDocument(config: AppConfig) {
             description: "A wallet-approved x402 payment is required",
             headers: {
               "PAYMENT-REQUIRED": { description: "Base64 x402 v2 payment requirements" },
+            },
+          },
+          "409": { description: "The settlement failed or is not deliverable" },
+          "503": { description: "The isolated facilitator is unavailable" },
+        },
+      },
+    };
+  }
+
+  if (config.mppResourceEnabled) {
+    paths["/mpp/v1"] = {
+      get: {
+        operationId: "getMppPaidNayoriCapabilityReport",
+        summary: "Purchase or retrieve the Nayori capability report with MPP PaymentAuth and USDCx",
+        "x-payment-info": {
+          offers: [
+            {
+              intent: "charge",
+              method: "usdc",
+              amount: null,
+              currency: mppCurrency,
+              description: "Settlement-backed Nayori commerce capability report",
+              methodDetails: { type: "stacks" },
+            },
+          ],
+        },
+        parameters: [
+          {
+            name: "settlement",
+            in: "query",
+            required: false,
+            schema: { type: "string", pattern: "^ns_[0-9a-f]{32}$" },
+            description: "Poll a previously submitted asynchronous Stacks settlement.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Confirmed USDCx settlement and idempotently delivered report",
+            headers: {
+              "Payment-Receipt": { description: "MPP PaymentAuth settlement receipt" },
+            },
+          },
+          "202": {
+            description: "The signed USDCx transaction is awaiting canonical confirmation",
+            headers: {
+              Location: { description: "Polling URL for this settlement" },
+              "Retry-After": { description: "Suggested polling delay in seconds" },
+              "X-NAYORI-SETTLEMENT-ID": { description: "Nayori settlement identifier" },
+            },
+          },
+          "402": {
+            description: "A wallet-approved MPP PaymentAuth USDCx payment is required",
+            headers: {
+              "WWW-Authenticate": { description: "Payment challenge selecting Payment-Authorization" },
             },
           },
           "409": { description: "The settlement failed or is not deliverable" },
@@ -389,6 +480,23 @@ export function createOpenApiDocument(config: AppConfig) {
         },
       },
     };
+    paths["/v1/mpp/verify"] = {
+      post: {
+        operationId: "verifyMppUsdcxPayment",
+        security: [{ merchantBearer: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        responses: {
+          "200": { description: "The MPP credential satisfies the quote; no broadcast occurred" },
+          "401": { description: "Merchant authentication failed" },
+          "409": { description: "The quote is unavailable" },
+          "422": { description: "Quote or MPP credential verification failed" },
+          "429": { description: "The merchant payment-operation rate limit was exceeded" },
+        },
+      },
+    };
   }
 
   if (config.settlementEnabled) {
@@ -405,6 +513,23 @@ export function createOpenApiDocument(config: AppConfig) {
           "401": { description: "Merchant authentication failed" },
           "409": { description: "Quote or transaction replay" },
           "422": { description: "Verification or definitive broadcast rejection" },
+          "429": { description: "The merchant payment-operation rate limit was exceeded" },
+        },
+      },
+    };
+    paths["/v1/mpp/settle"] = {
+      post: {
+        operationId: "settleMppUsdcxPaymentTestnet",
+        security: [{ merchantBearer: [] }],
+        requestBody: {
+          required: true,
+          content: { "application/json": { schema: { type: "object" } } },
+        },
+        responses: {
+          "202": { description: "Reserved and broadcast, or pending reconciliation; not confirmed" },
+          "401": { description: "Merchant authentication failed" },
+          "409": { description: "Quote or transaction replay" },
+          "422": { description: "MPP verification or definitive broadcast rejection" },
           "429": { description: "The merchant payment-operation rate limit was exceeded" },
         },
       },
@@ -463,10 +588,14 @@ export function createOpenApiDocument(config: AppConfig) {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Nayori x402 Facilitator API",
+      title: "Nayori Agent Commerce API",
       version: SERVICE_VERSION,
-      description: config.publicResourceEnabled
-        ? "Exposes a public same-origin x402 resource backed by an isolated Stacks facilitator."
+      description: config.publicResourceEnabled && config.mppResourceEnabled
+        ? "Exposes public x402 and MPP PaymentAuth resources backed by an isolated Stacks facilitator."
+        : config.mppResourceEnabled
+          ? "Exposes a public MPP PaymentAuth USDCx resource backed by an isolated Stacks facilitator."
+        : config.publicResourceEnabled
+          ? "Exposes a public same-origin x402 resource backed by an isolated Stacks facilitator."
         : config.deliveryLedgerEnabled
           ? "Issues quotes, settles on testnet, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger."
           : config.reconciliationEnabled
@@ -478,6 +607,14 @@ export function createOpenApiDocument(config: AppConfig) {
                 : config.quoteIssuanceEnabled
                   ? "Issues authenticated request-bound quotes. Payment verification and settlement are disabled."
                   : "Foundation release. Quote, verification and settlement operations are disabled.",
+    },
+    "x-service-info": {
+      categories: ["agent-commerce", "payments"],
+      protocols: [
+        ...(config.publicResourceEnabled ? ["x402"] : []),
+        ...(config.mppResourceEnabled ? ["mpp-paymentauth"] : []),
+      ],
+      documentation: "https://docs.nayori.ai",
     },
     servers: [{ url: config.serviceOrigin }],
     paths,
@@ -504,9 +641,9 @@ export function createOpenApiDocument(config: AppConfig) {
 }
 
 export function createLlmsText(config: AppConfig): string {
-  return `# Nayori x402 Facilitator
+  return `# Nayori Agent Commerce Facilitator
 
-> Private PerkOS infrastructure for request-bound x402 payments on Stacks.
+> Private PerkOS infrastructure for request-bound x402 and MPP PaymentAuth payments on Stacks.
 
 Status: ${serviceStatus(config)}
 Origin: ${config.serviceOrigin}
@@ -523,7 +660,10 @@ Partner registration enabled: ${config.partnerRegistrationEnabled}
 MCP enabled: ${config.mcpEnabled}
 Public paid resource enabled: ${config.publicResourceEnabled}
 Public paid resource: ${config.publicResourceEnabled ? config.publicResourceUrl : "unavailable"}
-Facilitator: ${config.publicResourceEnabled ? config.facilitatorOrigin : config.serviceOrigin}
+MPP PaymentAuth resource enabled: ${config.mppResourceEnabled}
+MPP PaymentAuth resource: ${config.mppResourceEnabled ? config.mppResourceUrl : "unavailable"}
+MPP method/intent/type/asset: usdc / charge / stacks / USDCx
+Facilitator: ${config.publicResourceEnabled || config.mppResourceEnabled ? config.facilitatorOrigin : config.serviceOrigin}
 Sponsorship enabled: false
 
 ${
@@ -547,6 +687,12 @@ ${
   config.publicResourceEnabled
     ? `The public resource at ${config.publicResourceUrl} returns a standard PAYMENT-REQUIRED challenge, accepts PAYMENT-SIGNATURE plus the issued X-NAYORI-SIGNED-QUOTE extension, and returns 202 until Stacks confirmation. It is delivered only with PAYMENT-RESPONSE after the isolated facilitator confirms settlement.`
     : "No public paid resource is enabled on this runtime."
+}
+
+${
+  config.mppResourceEnabled
+    ? `The MPP resource at ${config.mppResourceUrl} returns WWW-Authenticate: Payment, selects the alternate ${"Payment-Authorization"} credential header so OAuth Bearer remains independent, and returns 202 until Stacks confirmation. It emits Payment-Receipt only after confirmation and idempotent delivery.`
+    : "No public MPP PaymentAuth resource is enabled on this runtime."
 }
 
 SDK: https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK

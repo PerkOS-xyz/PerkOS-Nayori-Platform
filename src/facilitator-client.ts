@@ -22,6 +22,7 @@ export class FacilitatorClientError extends Error {
 export type FacilitatorClient = {
   issueQuote(input: unknown, requestId: string): Promise<IssuedQuoteResponse>;
   settle(input: unknown, requestId: string): Promise<SettlementResult>;
+  settleMpp(input: unknown, requestId: string): Promise<SettlementResult>;
   getSettlement(settlementId: string, requestId: string): Promise<PublicSettlement>;
   claimDelivery(settlementId: string, requestId: string): Promise<PublicDelivery>;
   completeDelivery(
@@ -129,6 +130,14 @@ export function createFacilitatorClient(options: {
       return request<SettlementResult>({
         method: "POST",
         path: "/v1/x402/settle",
+        body: input,
+        requestId,
+      });
+    },
+    settleMpp(input, requestId) {
+      return request<SettlementResult>({
+        method: "POST",
+        path: "/v1/mpp/settle",
         body: input,
         requestId,
       });
