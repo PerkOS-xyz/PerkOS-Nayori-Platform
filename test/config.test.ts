@@ -57,6 +57,7 @@ describe("loadConfig", () => {
     expect(config.reconciliationEnabled).toBe(false);
     expect(config.deliveryLedgerEnabled).toBe(false);
     expect(config.publicResourceEnabled).toBe(false);
+    expect(config.mppResourceEnabled).toBe(false);
     expect(config.settlementMinConfirmations).toBe(1);
     expect(config.sponsorshipEnabled).toBe(false);
     expect(config.port).toBe(8080);
@@ -83,6 +84,27 @@ describe("loadConfig", () => {
     expect(config.facilitatorOrigin).toBe("https://facilitator.nayori.ai");
   });
 
+  it("requires an isolated facilitator credential and URL for the MPP resource", () => {
+    expect(() =>
+      loadConfig({
+        ...REQUIRED_ENVIRONMENT,
+        MPP_RESOURCE_ENABLED: "true",
+      }),
+    ).toThrow(/merchant API key/i);
+
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      SERVICE_ORIGIN: "https://api.nayori.ai",
+      MPP_RESOURCE_ENABLED: "true",
+      MPP_RESOURCE_URL: "https://nayori.ai/api/mpp/v1",
+      FACILITATOR_ORIGIN: "https://facilitator.nayori.ai/",
+      FACILITATOR_MERCHANT_API_KEY: `ny_mk_${"A".repeat(43)}`,
+    });
+    expect(config.mppResourceEnabled).toBe(true);
+    expect(config.mppResourceUrl).toBe("https://nayori.ai/api/mpp/v1");
+    expect(config.mppResourceRouteId).toBe("nayori-mpp-usdcx-report");
+  });
+
   it("rejects a facilitator that shares the resource or API origin", () => {
     const base = {
       ...REQUIRED_ENVIRONMENT,
@@ -97,6 +119,15 @@ describe("loadConfig", () => {
       ...base,
       FACILITATOR_ORIGIN: "https://api.nayori.ai",
     })).toThrow(/resource server and facilitator/i);
+
+    expect(() => loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      SERVICE_ORIGIN: "https://api.nayori.ai",
+      MPP_RESOURCE_ENABLED: "true",
+      MPP_RESOURCE_URL: "https://facilitator.nayori.ai/mpp/v1",
+      FACILITATOR_ORIGIN: "https://facilitator.nayori.ai",
+      FACILITATOR_MERCHANT_API_KEY: `ny_mk_${"A".repeat(43)}`,
+    })).toThrow(/public resource and facilitator/i);
   });
 
   it("normalizes the service origin", () => {

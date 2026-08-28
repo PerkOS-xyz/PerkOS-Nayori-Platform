@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getNayoriX402Asset,
   NayoriX402DirectVerificationError,
+  type NayoriMppVerifiedUsdcStacksPayment,
   type NayoriX402VerifiedDirectPayment,
 } from "@perkos/agent-sdk";
 
@@ -42,7 +43,7 @@ const TXID = `0x${"a".repeat(64)}`;
 const merchant: MerchantRecord = {
   merchantId: "merchant-1",
   allowedOrigins: ["https://merchant.example"],
-  allowedAudiences: ["merchant:research"],
+  allowedAudiences: ["merchant:research", "merchant:mpp"],
   recipientAllowlist: [PAY_TO],
   routeConfig: {
     version: 1,
@@ -54,6 +55,16 @@ const merchant: MerchantRecord = {
         network: "testnet",
         asset: "sbtc",
         amount: "1000",
+        payTo: PAY_TO,
+        ttlSeconds: 120,
+      },
+      mpp: {
+        method: "GET",
+        pathPrefix: "/v1/mpp",
+        audience: "merchant:mpp",
+        network: "testnet",
+        asset: "usdcx",
+        amount: "10000",
         payTo: PAY_TO,
         ttlSeconds: 120,
       },
@@ -226,10 +237,30 @@ function verifiedPayment(overrides: Partial<NayoriX402VerifiedDirectPayment> = {
   } satisfies NayoriX402VerifiedDirectPayment;
 }
 
+function verifiedMppPayment(
+  overrides: Partial<NayoriMppVerifiedUsdcStacksPayment> = {},
+) {
+  return {
+    ...verifiedPayment({
+      asset: "usdcx",
+      assetDefinition: getNayoriX402Asset("testnet", "usdcx"),
+      amount: 10_000n,
+    }),
+    protocol: "mpp" as const,
+    method: "usdc" as const,
+    intent: "charge" as const,
+    profile: "stacks" as const,
+    challengeId: "placeholder",
+    source: `stacks:2147483648:${PAYER}`,
+    ...overrides,
+  } satisfies NayoriMppVerifiedUsdcStacksPayment;
+}
+
 async function context(
   outcome: BroadcastResult = { outcome: "accepted", txid: TXID },
   paymentRateLimit = 60,
   deliveryLedgerEnabled = false,
+  protocol: "x402" | "mpp" = "x402",
 ) {
   const { privateKey } = await generateKeyPair("EdDSA", {
     crv: "Ed25519",
@@ -258,12 +289,20 @@ async function context(
   const store = new MemoryStore(hashMerchantApiKey(apiKey));
   const signer = await createQuoteSigner(config);
   const quoteService = createQuoteService({ config, store, signer, now: () => NOW });
+  const request = protocol === "mpp"
+    ? {
+        method: "GET",
+        url: "https://merchant.example/v1/mpp/report",
+      }
+    : {
+        method: "POST",
+        url: "https://merchant.example/v1/research/stacks",
+        body: '{"topic":"stacks"}',
+      };
   const issued = await quoteService.issue(`Bearer ${apiKey}`, {
-    routeId: "research",
+    routeId: protocol === "mpp" ? "mpp" : "research",
     request: {
-      method: "POST",
-      url: "https://merchant.example/v1/research/stacks",
-      body: '{"topic":"stacks"}',
+      ...request,
     },
   });
   const broadcast = vi.fn(async () => outcome);
@@ -274,30 +313,40 @@ async function context(
       quoteFingerprint: issued.response.paymentRequirements.extra.quoteFingerprint as string,
     }),
   );
+  const verifyMpp = vi.fn(async () =>
+    verifiedMppPayment({
+      quoteId: issued.quoteId,
+      challengeId: issued.quoteId,
+      quoteFingerprint: issued.response.paymentRequirements.extra.quoteFingerprint as string,
+    }),
+  );
   const service = createSettlementService({
     config,
     store,
     signer,
     broadcaster,
     verifier: verify,
+    mppVerifier: verifyMpp,
     now: () => NOW + 10_000,
     ...(deliveryLedgerEnabled ? { deliveryStore: store } : {}),
   });
-  const input = {
-    signedQuote: issued.response.signedQuote,
-    paymentRequirements: issued.response.paymentRequirements,
-    paymentPayload: {
-      x402Version: 2,
-      accepted: issued.response.paymentRequirements,
-      payload: { transaction: "00" },
-      extensions: {},
-    },
-    request: {
-      method: "POST",
-      url: "https://merchant.example/v1/research/stacks",
-      body: '{"topic":"stacks"}',
-    },
-  };
+  const input = protocol === "mpp"
+    ? {
+        signedQuote: issued.response.signedQuote,
+        credential: {},
+        request,
+      }
+    : {
+        signedQuote: issued.response.signedQuote,
+        paymentRequirements: issued.response.paymentRequirements,
+        paymentPayload: {
+          x402Version: 2,
+          accepted: issued.response.paymentRequirements,
+          payload: { transaction: "00" },
+          extensions: {},
+        },
+        request,
+      };
   return {
     apiKey,
     broadcast,
@@ -309,6 +358,7 @@ async function context(
     signer,
     store,
     verify,
+    verifyMpp,
   };
 }
 
@@ -349,6 +399,32 @@ describe("payment verification and testnet settlement", () => {
     });
     expect(test.store.settlements.size).toBe(0);
     expect(test.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("verifies and settles MPP USDCx through the same replay-safe pipeline", async () => {
+    const test = await context({ outcome: "accepted", txid: TXID }, 60, false, "mpp");
+    const verification = await test.service.verifyMpp(`Bearer ${test.apiKey}`, test.input);
+    expect(verification).toMatchObject({
+      status: "verified",
+      merchantId: "merchant-1",
+      quoteId: test.issued.quoteId,
+      asset: "usdcx",
+      amount: "10000",
+      txid: TXID,
+      sponsored: false,
+    });
+    expect(test.broadcast).not.toHaveBeenCalled();
+
+    const first = await test.service.settleMpp(`Bearer ${test.apiKey}`, test.input);
+    const replay = await test.service.settleMpp(`Bearer ${test.apiKey}`, test.input);
+    expect(first).toMatchObject({ replayed: false, settlement: { status: "broadcast" } });
+    expect(replay).toMatchObject({
+      replayed: true,
+      settlement: { settlementId: first.settlement.settlementId },
+    });
+    expect(test.verifyMpp).toHaveBeenCalledTimes(3);
+    expect(test.verify).not.toHaveBeenCalled();
+    expect(test.broadcast).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid credentials, token tampering and SDK verifier failures", async () => {
@@ -426,8 +502,8 @@ describe("payment verification and testnet settlement", () => {
       settlement: { settlementId: first.settlement.settlementId, status: "broadcast" },
     });
     expect([...test.store.settlements.values()][0]).toMatchObject({
-      verifierVersion: "@perkos/agent-sdk@0.3.2",
-      verifierChecksum: "ebff7ec0e42b59c0767714195953a60acfee01df630bc92f1d8c9287986f32f7",
+      verifierVersion: "@perkos/agent-sdk@0.5.0",
+      verifierChecksum: "8d4d34e400ea2e12720ffbd020e0bb66f30819af13fdda118f01858e8ef9baf0",
     });
     expect(test.broadcast).toHaveBeenCalledTimes(1);
   });
@@ -502,6 +578,38 @@ describe("payment verification and testnet settlement", () => {
       paths: Record<string, unknown>;
     };
     expect(openapi.paths).toHaveProperty("/v1/x402/settle");
+  });
+
+  it("exposes authenticated MPP verification and settlement routes when enabled", async () => {
+    const test = await context({ outcome: "accepted", txid: TXID }, 60, false, "mpp");
+    const app = createApp({
+      config: test.config,
+      database: test.store,
+      logger: { info() {}, error() {} },
+      quoteService: test.quoteService,
+      settlementService: test.service,
+    });
+    const headers = {
+      authorization: `Bearer ${test.apiKey}`,
+      "content-type": "application/json",
+    };
+    const verifyResponse = await app.request("/v1/mpp/verify", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(test.input),
+    });
+    const settleResponse = await app.request("/v1/mpp/settle", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(test.input),
+    });
+    expect(verifyResponse.status).toBe(200);
+    expect(settleResponse.status).toBe(202);
+    const openapi = (await (await app.request("/openapi.json")).json()) as {
+      paths: Record<string, unknown>;
+    };
+    expect(openapi.paths).toHaveProperty("/v1/mpp/verify");
+    expect(openapi.paths).toHaveProperty("/v1/mpp/settle");
   });
 
   it("claims and completes a confirmed delivery idempotently", async () => {

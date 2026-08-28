@@ -5,13 +5,14 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at the **same-origin paid-resource, external-OAuth and testnet settlement boundary**. It
+This repository is at the **multi-protocol paid-resource, external-OAuth and testnet settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
 merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
 verifier, durable reservation, one Stacks testnet
 broadcast attempt, leased reconciliation, canonical confirmation-depth checks and signed
-settlement receipts. A resource-server runtime can now expose the real x402 v2 payment flow at
-`api.nayori.ai/v1`, while a separately configured runtime owns settlement at
+settlement receipts. A resource-server runtime can expose x402 v2 at `api.nayori.ai/v1` and MPP
+PaymentAuth (`method=usdc`, `intent=charge`, `type=stacks`) at `api.nayori.ai/mpp/v1`. Both use
+wallet-approved Stacks transactions; the MPP route is USDCx-only. A separately configured runtime owns settlement at
 `facilitator.nayori.ai`.
 
 All write capabilities remain disabled by default. `broadcast` and `pending` are unconfirmed and
@@ -22,10 +23,10 @@ URLs. Mainnet and sponsorship remain disabled. M1 contracts and deployments are 
 ## Architecture
 
 ```text
-Agent / Leather ---> nayori.ai/api/v1 (same-origin proxy)
+Agent / Leather ---> nayori.ai/api/v1 or /api/mpp/v1 (same-origin proxy)
                               |
                               v
-                    api.nayori.ai/v1 (paid resource)
+                  api.nayori.ai (x402 / MPP paid resources)
                               |
                     merchant-authenticated HTTPS
                               v
@@ -66,9 +67,12 @@ client state and signing material belong to the separate private `PerkOS-Nayori-
 | `GET /.well-known/mcp/server-card.json` | Experimental MCP server card |
 | `POST /mcp` | Authenticated Streamable HTTP JSON-RPC with implemented Nayori tools |
 | `GET /v1` | Public x402 v2 challenge, payment submission, asynchronous polling and confirmed capability-report delivery |
+| `GET /mpp/v1` | Public MPP PaymentAuth USDCx challenge, submission, polling and confirmation-gated delivery |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
 | `POST /v1/x402/verify` | Authenticated verify-only check; never broadcasts |
 | `POST /v1/x402/settle` | Reserves and broadcasts once on testnet; returns unconfirmed state |
+| `POST /v1/mpp/verify` | Authenticated MPP credential verification; never broadcasts |
+| `POST /v1/mpp/settle` | Reserves and broadcasts one verified MPP USDCx transaction on testnet |
 | `GET /v1/x402/settlements/:id` | Merchant-isolated status for a reserved settlement |
 | `POST /v1/x402/settlements/:id/delivery/claim` | Claims the stable delivery ID and signed receipt |
 | `POST /v1/x402/settlements/:id/delivery/complete` | Records an idempotent response digest |
@@ -78,6 +82,12 @@ The public `GET /v1` route is absent while `PUBLIC_RESOURCE_ENABLED=false`. Its 
 `X-NAYORI-SIGNED-QUOTE` extension. A submitted Stacks transaction returns 202 and a polling URL
 until canonical confirmation. Only a confirmed settlement returns the resource with
 `PAYMENT-RESPONSE`.
+
+The public `GET /mpp/v1` route is absent while `MPP_RESOURCE_ENABLED=false`. Its 402 response uses
+`WWW-Authenticate: Payment` and explicitly selects `Payment-Authorization`, leaving the ordinary
+`Authorization` header available for OAuth Bearer credentials. The client also returns the issued
+`X-NAYORI-SIGNED-QUOTE`. Pending submissions return 202; `Payment-Receipt` exists only after
+canonical confirmation and idempotent resource delivery.
 
 Quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. Verify is absent unless
 `PAYMENT_VERIFICATION_ENABLED=true`; settle and status are absent unless
@@ -164,6 +174,10 @@ See [`.env.example`](.env.example). Important fail-closed settings:
   `FACILITATOR_MERCHANT_API_KEY`. `PUBLIC_RESOURCE_URL`, `PUBLIC_RESOURCE_ROUTE_ID` and
   `FACILITATOR_ORIGIN` bind the public route to a separately hosted facilitator. The resource,
   API and facilitator origins must remain distinct; production origins require HTTPS.
+- `MPP_RESOURCE_ENABLED=true` enables the MPP PaymentAuth resource and also requires the isolated
+  facilitator credential. `MPP_RESOURCE_URL` and `MPP_RESOURCE_ROUTE_ID` bind an independently
+  provisioned USDCx-only merchant route. The service fails closed instead of falling back to
+  another asset.
 - `FACILITATOR_REQUEST_TIMEOUT_MS` bounds every server-to-server facilitator call. The merchant
   credential is never returned to the payer, browser or same-origin proxy.
 - `SPONSORSHIP_ENABLED` accepts only `false` or `0` in this release.
@@ -190,7 +204,7 @@ documented in the design, and `DATABASE_URL`, then run:
 npm run merchant:provision
 ```
 
-The command validates every route through SDK 0.3.2, writes only a SHA-256 credential digest and
+The command validates every route through SDK 0.5.0, writes only a SHA-256 credential digest and
 prints the new `ny_mk_` API key once. Store that key in the merchant secret manager. Named route
 configuration fixes method, path prefix, audience, network, asset, amount, recipient and TTL on
 the server, so the quote request cannot redirect funds or change price.
@@ -252,12 +266,13 @@ The schema and quote issuer support STX, sBTC and USDCx profiles without enablin
 
 Transaction parsing and economic verification belong in the public
 [`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins exact
-release `0.3.2`; it does not copy the SDK implementation.
+release `0.5.0`; it does not copy the SDK implementation.
 
-SDK 0.3.2 owns quote canonicalization, asset definitions, x402 requirements, fingerprints, origin
-signature validation and the pure `stacks-signed-tx-v1` verifier. This Platform release invokes
-that verifier, rejects sponsorship, compares the signed token to its issued database record and
-persists only normalized evidence and a raw-transaction digest before broadcasting.
+SDK 0.5.0 owns quote canonicalization, asset definitions, x402 requirements, MPP PaymentAuth
+challenge/credential/receipt encoding, fingerprints, origin signature validation and the pure
+`stacks-signed-tx-v1` verifiers. Platform authenticates the merchant and signed quote first, then
+invokes the protocol-specific verifier, rejects sponsorship and persists only normalized evidence
+plus a raw-transaction digest before broadcasting.
 
 ## Known testnet limitations
 
@@ -269,7 +284,7 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
 - The delivery ledger makes retries idempotent by delivery ID, but the merchant resource server must
   enforce that key around its own external side effects.
 - Mainnet and transaction sponsorship remain unavailable. The only automatic delivery is the
-  fixed Nayori capability report after confirmed testnet settlement; arbitrary URL proxying remains
+  fixed Nayori capability report after confirmed testnet x402 or MPP settlement; arbitrary URL proxying remains
   unavailable.
 - MCP Server Cards remain an experimental ecosystem extension; the card truthfully advertises
   only the implemented Streamable HTTP tools.
@@ -280,12 +295,13 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
 2. Merchant authentication and signed, short-lived request quotes — complete.
 3. Pinned SDK verifier, durable reservation and testnet broadcast — complete.
 4. Reconciliation worker, confirmation receipts and delivery ledger — complete.
-5. SDK 0.3 paying flow and Platform verifier pin — complete; external clean-room remains a
+5. SDK paying flow and initial Platform verifier pin — complete; external clean-room remains a
    separate adoption gate.
 6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — complete.
 7. Separate authorization server and external JWT/JWKS resource verification — complete.
-8. Same-origin public x402 resource with an isolated facilitator and confirmation-gated delivery — this release.
-9. Isolated sponsor relay only after the non-sponsored path passes review.
+8. Same-origin public x402 resource with an isolated facilitator and confirmation-gated delivery — complete.
+9. MPP PaymentAuth USDCx resource reusing the non-sponsored settlement pipeline — this release.
+10. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
 [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)

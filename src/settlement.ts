@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  createNayoriMppUsdcStacksChallenge,
+  NayoriMppVerificationError,
   NayoriX402DirectVerificationError,
   STACKS_X402_NETWORKS,
+  verifyNayoriMppUsdcStacksPayment,
   verifyNayoriX402DirectPayment,
+  type NayoriMppVerifiedUsdcStacksPayment,
   type NayoriX402ProtectedRequest,
   type NayoriX402VerifiedDirectPayment,
   type PaymentPayload,
@@ -33,9 +37,9 @@ import type { MerchantRecord } from "./merchant.js";
 import type { QuoteSigner, VerifiedQuoteToken } from "./quote-signing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 
-const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.3.2";
+const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.5.0";
 const SDK_NPM_INTEGRITY =
-  "sha512-o5Zk1UP8jldfYnNj2XBADvE0tiiaiaBXsry1rsD9PfSft+6VWZvpAcWUaBlq6+D6Z99fNFcYUZDZesbRm8KUrA==";
+  "sha512-TAVNTpYdlk1w9nsCWfj7cyeS+tk6Jg+DaTGNfj/wQNBOTihRtQZx7TpGdAvLglAW7r2Ed6kOnXXAVr/srw5/0Q==";
 const SDK_VERIFIER_CHECKSUM = createHash("sha256")
   .update(SDK_NPM_INTEGRITY, "utf8")
   .digest("hex");
@@ -58,6 +62,21 @@ const paymentRequestSchema = z
   .strict();
 
 type PaymentRequest = z.infer<typeof paymentRequestSchema>;
+const mppPaymentRequestSchema = z
+  .object({
+    signedQuote: z.string().min(1).max(16_384),
+    credential: z.record(z.string(), z.unknown()),
+    request: z
+      .object({
+        method: z.string().min(1).max(32),
+        url: z.url().max(4096),
+        body: z.string().max(49_152).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+type MppPaymentRequest = z.infer<typeof mppPaymentRequestSchema>;
 type SettlementErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429;
 
 export class SettlementServiceError extends Error {
@@ -125,7 +144,9 @@ export type SettlementResult = {
 
 export type SettlementService = {
   verify(authorization: string | undefined, input: unknown): Promise<PaymentVerification>;
+  verifyMpp(authorization: string | undefined, input: unknown): Promise<PaymentVerification>;
   settle(authorization: string | undefined, input: unknown): Promise<SettlementResult>;
+  settleMpp(authorization: string | undefined, input: unknown): Promise<SettlementResult>;
   get(
     authorization: string | undefined,
     settlementId: string,
@@ -142,6 +163,7 @@ export type SettlementService = {
 };
 
 type PaymentVerifier = typeof verifyNayoriX402DirectPayment;
+type MppPaymentVerifier = typeof verifyNayoriMppUsdcStacksPayment;
 
 type ValidatedPayment = {
   readonly merchant: MerchantRecord;
@@ -149,6 +171,8 @@ type ValidatedPayment = {
   readonly payment: NayoriX402VerifiedDirectPayment & { readonly transactionId: string };
   readonly signedTokenHash: string;
 };
+
+type ValidatedQuote = Pick<ValidatedPayment, "merchant" | "token" | "signedTokenHash">;
 
 function unauthorized(): SettlementServiceError {
   return new SettlementServiceError(
@@ -237,6 +261,7 @@ export function createSettlementService(options: {
   readonly signer: QuoteSigner;
   readonly broadcaster?: TransactionBroadcaster;
   readonly verifier?: PaymentVerifier;
+  readonly mppVerifier?: MppPaymentVerifier;
   readonly now?: () => number;
   readonly rateLimiter?: FixedWindowRateLimiter;
   readonly deliveryStore?: DeliveryLedgerStore;
@@ -250,6 +275,7 @@ export function createSettlementService(options: {
     throw new Error("The delivery ledger is enabled without a delivery store.");
   }
   const verifier = options.verifier ?? verifyNayoriX402DirectPayment;
+  const mppVerifier = options.mppVerifier ?? verifyNayoriMppUsdcStacksPayment;
   const now = options.now ?? (() => Date.now());
   const rateLimiter =
     options.rateLimiter ?? new FixedWindowRateLimiter(config.paymentRateLimitPerMinute, now);
@@ -284,24 +310,15 @@ export function createSettlementService(options: {
     return merchant;
   }
 
-  async function validate(
-    authorization: string | undefined,
-    input: unknown,
-    allowReserved = false,
-    requiredScope: OAuthScope = "payments:verify",
-  ): Promise<ValidatedPayment> {
-    const merchant = await authenticate(authorization, requiredScope);
-    const parsed = paymentRequestSchema.safeParse(input);
-    if (!parsed.success) {
-      throw new SettlementServiceError("invalid_request", "The payment request is invalid.", 400);
-    }
-    const request: PaymentRequest = parsed.data;
-    const signedTokenHash = createHash("sha256")
-      .update(request.signedQuote, "utf8")
-      .digest("hex");
+  async function validateQuote(
+    merchant: MerchantRecord,
+    signedQuote: string,
+    allowReserved: boolean,
+  ): Promise<ValidatedQuote> {
+    const signedTokenHash = createHash("sha256").update(signedQuote, "utf8").digest("hex");
     let token: VerifiedQuoteToken;
     try {
-      token = await signer.verify(request.signedQuote, Math.floor(now() / 1_000));
+      token = await signer.verify(signedQuote, Math.floor(now() / 1_000));
     } catch {
       throw new SettlementServiceError(
         "invalid_signed_quote",
@@ -339,13 +356,29 @@ export function createSettlementService(options: {
         409,
       );
     }
+    return { merchant, token, signedTokenHash };
+  }
+
+  async function validate(
+    authorization: string | undefined,
+    input: unknown,
+    allowReserved = false,
+    requiredScope: OAuthScope = "payments:verify",
+  ): Promise<ValidatedPayment> {
+    const merchant = await authenticate(authorization, requiredScope);
+    const parsed = paymentRequestSchema.safeParse(input);
+    if (!parsed.success) {
+      throw new SettlementServiceError("invalid_request", "The payment request is invalid.", 400);
+    }
+    const request: PaymentRequest = parsed.data;
+    const validatedQuote = await validateQuote(merchant, request.signedQuote, allowReserved);
 
     let payment: NayoriX402VerifiedDirectPayment;
     try {
       payment = await verifier({
         paymentPayload: request.paymentPayload as unknown as PaymentPayload,
         paymentRequirements: request.paymentRequirements as unknown as PaymentRequirements,
-        trustedQuote: token.quote,
+        trustedQuote: validatedQuote.token.quote,
         request: request.request as NayoriX402ProtectedRequest,
         nowSeconds: Math.floor(now() / 1_000),
       });
@@ -369,92 +402,163 @@ export function createSettlementService(options: {
     }
     return {
       merchant,
-      token,
+      token: validatedQuote.token,
       payment: payment as NayoriX402VerifiedDirectPayment & { readonly transactionId: string },
-      signedTokenHash,
+      signedTokenHash: validatedQuote.signedTokenHash,
+    };
+  }
+
+  async function validateMpp(
+    authorization: string | undefined,
+    input: unknown,
+    allowReserved = false,
+    requiredScope: OAuthScope = "payments:verify",
+  ): Promise<ValidatedPayment> {
+    const merchant = await authenticate(authorization, requiredScope);
+    const parsed = mppPaymentRequestSchema.safeParse(input);
+    if (!parsed.success) {
+      throw new SettlementServiceError("invalid_request", "The MPP payment request is invalid.", 400);
+    }
+    const request: MppPaymentRequest = parsed.data;
+    const validatedQuote = await validateQuote(merchant, request.signedQuote, allowReserved);
+    const expectedChallenge = await createNayoriMppUsdcStacksChallenge({
+      quote: validatedQuote.token.quote,
+      realm: new URL(validatedQuote.token.quote.url).hostname,
+    });
+    let payment: NayoriMppVerifiedUsdcStacksPayment;
+    try {
+      payment = await mppVerifier({
+        credential: request.credential,
+        expectedChallenge: expectedChallenge.challenge,
+        trustedQuote: validatedQuote.token.quote,
+        request: request.request as NayoriX402ProtectedRequest,
+        nowSeconds: Math.floor(now() / 1_000),
+      });
+    } catch (error) {
+      const reason =
+        error instanceof NayoriMppVerificationError
+          ? error.reason
+          : "mpp_payment_verification_failed";
+      throw new SettlementServiceError(
+        reason,
+        "The MPP payment credential does not satisfy the signed quote.",
+        422,
+      );
+    }
+    if (payment.sponsored || !payment.transactionId) {
+      throw new SettlementServiceError(
+        "sponsorship_not_supported",
+        "Sponsored transactions are not supported by this settlement release.",
+        422,
+      );
+    }
+    return {
+      merchant,
+      token: validatedQuote.token,
+      payment: payment as NayoriMppVerifiedUsdcStacksPayment & {
+        readonly transactionId: string;
+      },
+      signedTokenHash: validatedQuote.signedTokenHash,
+    };
+  }
+
+  function asPaymentVerification(validated: ValidatedPayment): PaymentVerification {
+    return {
+      status: "verified",
+      quoteId: validated.token.quoteId,
+      merchantId: validated.merchant.merchantId,
+      network: validated.payment.x402Network,
+      asset: validated.payment.asset,
+      amount: validated.payment.amount.toString(),
+      payer: validated.payment.payer,
+      payTo: validated.payment.payTo,
+      txid: validated.payment.transactionId,
+      sponsored: false,
+    };
+  }
+
+  async function settleValidated(validated: ValidatedPayment): Promise<SettlementResult> {
+    if (!broadcaster) {
+      throw new Error("Settlement is not enabled.");
+    }
+    let reservation;
+    try {
+      reservation = await store.reserveSettlement({
+        settlementId: newSettlementId(),
+        quoteId: validated.token.quoteId,
+        merchantId: validated.merchant.merchantId,
+        network: validated.payment.x402Network,
+        txid: validated.payment.transactionId,
+        payer: validated.payment.payer,
+        rawTxHash: rawTransactionHash(validated.payment.transaction),
+        verifierVersion: SDK_VERIFIER_VERSION,
+        verifierChecksum: SDK_VERIFIER_CHECKSUM,
+        expectedSignedTokenHash: validated.signedTokenHash,
+      });
+    } catch (error) {
+      if (error instanceof SettlementStoreError) {
+        throw new SettlementServiceError(
+          error.code,
+          error.code === "payment_replayed"
+            ? "The payment transaction or quote is already reserved."
+            : "The quote is no longer available for settlement.",
+          409,
+        );
+      }
+      throw error;
+    }
+    if (!reservation.created) {
+      return {
+        settlement: publicSettlement(reservation.settlement, config.deliveryLedgerEnabled),
+        replayed: true,
+      };
+    }
+
+    const attemptedAt = new Date(now());
+    const outcome = await broadcaster.broadcast(validated.payment.transaction);
+    const normalizedOutcome =
+      outcome.outcome === "accepted" && outcome.txid !== validated.payment.transactionId
+        ? { outcome: "ambiguous" as const, reason: "broadcast_txid_mismatch" }
+        : outcome;
+    const status =
+      normalizedOutcome.outcome === "accepted"
+        ? "broadcast"
+        : normalizedOutcome.outcome === "rejected"
+          ? "failed"
+          : "pending";
+    const reason = normalizedOutcome.outcome === "accepted" ? null : normalizedOutcome.reason;
+    const updated = await store.updateSettlementStatus(
+      reservation.settlement.settlementId,
+      "validated",
+      status,
+      reason,
+      attemptedAt,
+    );
+    return {
+      settlement: publicSettlement(updated, config.deliveryLedgerEnabled),
+      replayed: false,
     };
   }
 
   return {
     async verify(authorization, input) {
       const validated = await validate(authorization, input);
-      return {
-        status: "verified",
-        quoteId: validated.token.quoteId,
-        merchantId: validated.merchant.merchantId,
-        network: validated.payment.x402Network,
-        asset: validated.payment.asset,
-        amount: validated.payment.amount.toString(),
-        payer: validated.payment.payer,
-        payTo: validated.payment.payTo,
-        txid: validated.payment.transactionId,
-        sponsored: false,
-      };
+      return asPaymentVerification(validated);
+    },
+
+    async verifyMpp(authorization, input) {
+      const validated = await validateMpp(authorization, input);
+      return asPaymentVerification(validated);
     },
 
     async settle(authorization, input) {
-      if (!broadcaster) {
-        throw new Error("Settlement is not enabled.");
-      }
       const validated = await validate(authorization, input, true, "payments:settle");
-      let reservation;
-      try {
-        reservation = await store.reserveSettlement({
-          settlementId: newSettlementId(),
-          quoteId: validated.token.quoteId,
-          merchantId: validated.merchant.merchantId,
-          network: validated.payment.x402Network,
-          txid: validated.payment.transactionId,
-          payer: validated.payment.payer,
-          rawTxHash: rawTransactionHash(validated.payment.transaction),
-          verifierVersion: SDK_VERIFIER_VERSION,
-          verifierChecksum: SDK_VERIFIER_CHECKSUM,
-          expectedSignedTokenHash: validated.signedTokenHash,
-        });
-      } catch (error) {
-        if (error instanceof SettlementStoreError) {
-          throw new SettlementServiceError(
-            error.code,
-            error.code === "payment_replayed"
-              ? "The payment transaction or quote is already reserved."
-              : "The quote is no longer available for settlement.",
-            409,
-          );
-        }
-        throw error;
-      }
-      if (!reservation.created) {
-        return {
-          settlement: publicSettlement(reservation.settlement, config.deliveryLedgerEnabled),
-          replayed: true,
-        };
-      }
+      return settleValidated(validated);
+    },
 
-      const attemptedAt = new Date(now());
-      const outcome = await broadcaster.broadcast(validated.payment.transaction);
-      const normalizedOutcome =
-        outcome.outcome === "accepted" && outcome.txid !== validated.payment.transactionId
-          ? { outcome: "ambiguous" as const, reason: "broadcast_txid_mismatch" }
-          : outcome;
-      const status =
-        normalizedOutcome.outcome === "accepted"
-          ? "broadcast"
-          : normalizedOutcome.outcome === "rejected"
-            ? "failed"
-            : "pending";
-      const reason =
-        normalizedOutcome.outcome === "accepted" ? null : normalizedOutcome.reason;
-      const updated = await store.updateSettlementStatus(
-        reservation.settlement.settlementId,
-        "validated",
-        status,
-        reason,
-        attemptedAt,
-      );
-      return {
-        settlement: publicSettlement(updated, config.deliveryLedgerEnabled),
-        replayed: false,
-      };
+    async settleMpp(authorization, input) {
+      const validated = await validateMpp(authorization, input, true, "payments:settle");
+      return settleValidated(validated);
     },
 
     async get(authorization, settlementId) {

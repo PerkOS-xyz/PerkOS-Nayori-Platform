@@ -123,6 +123,9 @@ function fakeFacilitator() {
     async settle() {
       return { settlement: settlement(currentStatus), replayed: false };
     },
+    async settleMpp() {
+      return { settlement: settlement(currentStatus), replayed: false };
+    },
     async getSettlement() {
       return settlement(currentStatus);
     },

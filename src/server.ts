@@ -8,6 +8,7 @@ import { createExternalOAuthAuthenticator } from "./external-oauth.js";
 import { createFacilitatorClient } from "./facilitator-client.js";
 import { consoleLogger } from "./logger.js";
 import { createMcpService } from "./mcp.js";
+import { createMppResourceService } from "./mpp-resource.js";
 import { createOAuthService, createOAuthSigner } from "./oauth.js";
 import { createPaidResourceService } from "./paid-resource.js";
 import { createQuoteSigner } from "./quote-signing.js";
@@ -66,6 +67,16 @@ const paidResourceService = config.publicResourceEnabled
       }),
     })
   : undefined;
+const mppResourceService = config.mppResourceEnabled
+  ? createMppResourceService({
+      config,
+      facilitator: createFacilitatorClient({
+        origin: config.facilitatorOrigin,
+        merchantApiKey: config.facilitatorMerchantApiKey!,
+        timeoutMs: config.facilitatorRequestTimeoutMs,
+      }),
+    })
+  : undefined;
 const app = createApp({
   config,
   database,
@@ -75,6 +86,7 @@ const app = createApp({
   oauthService,
   mcpService,
   paidResourceService,
+  mppResourceService,
 });
 
 const server = serve(
@@ -100,7 +112,12 @@ const server = serve(
       mcpEnabled: config.mcpEnabled,
       publicResourceEnabled: config.publicResourceEnabled,
       publicResourceUrl: config.publicResourceEnabled ? config.publicResourceUrl : undefined,
-      facilitatorOrigin: config.publicResourceEnabled ? config.facilitatorOrigin : undefined,
+      mppResourceEnabled: config.mppResourceEnabled,
+      mppResourceUrl: config.mppResourceEnabled ? config.mppResourceUrl : undefined,
+      facilitatorOrigin:
+        config.publicResourceEnabled || config.mppResourceEnabled
+          ? config.facilitatorOrigin
+          : undefined,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });
   },
