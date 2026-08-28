@@ -31,6 +31,23 @@ const httpUrlSchema = z.url().superRefine((value, context) => {
   }
 });
 
+const merchantApiKeySchema = z
+  .string()
+  .regex(/^ny_mk_[A-Za-z0-9_-]{43}$/, "The facilitator merchant API key is invalid.");
+
+const publicResourceUrlSchema = z.url().superRefine((value, context) => {
+  const parsed = new URL(value);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    context.addIssue({ code: "custom", message: "PUBLIC_RESOURCE_URL must use HTTP or HTTPS." });
+  }
+  if (parsed.search || parsed.hash) {
+    context.addIssue({
+      code: "custom",
+      message: "PUBLIC_RESOURCE_URL must not contain a query string or fragment.",
+    });
+  }
+});
+
 const environmentSchema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -70,6 +87,20 @@ const environmentSchema = z
     OAUTH_JWKS_URI: z.url().default("https://oauth.nayori.ai/oauth/jwks.json"),
     PARTNER_REGISTRATION_ENABLED: booleanFlag,
     MCP_ENABLED: booleanFlag,
+    PUBLIC_RESOURCE_ENABLED: booleanFlag,
+    PUBLIC_RESOURCE_URL: publicResourceUrlSchema.default("https://nayori.ai/api/v1"),
+    PUBLIC_RESOURCE_ROUTE_ID: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/)
+      .default("nayori-capability-report"),
+    FACILITATOR_ORIGIN: httpUrlSchema.default("https://facilitator.nayori.ai"),
+    FACILITATOR_MERCHANT_API_KEY: merchantApiKeySchema.optional(),
+    FACILITATOR_REQUEST_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(500)
+      .max(30_000)
+      .default(10_000),
     OAUTH_SIGNING_PRIVATE_JWK_JSON: z.string().min(1).optional(),
     OAUTH_PREVIOUS_PUBLIC_JWKS_JSON: z.string().min(1).default('{"keys":[]}'),
     OAUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
@@ -169,6 +200,46 @@ const environmentSchema = z
         message: "The MCP endpoint requires OAuth.",
       });
     }
+    if (value.PUBLIC_RESOURCE_ENABLED && !value.FACILITATOR_MERCHANT_API_KEY) {
+      context.addIssue({
+        code: "custom",
+        path: ["FACILITATOR_MERCHANT_API_KEY"],
+        message: "The public paid resource requires a facilitator merchant API key.",
+      });
+    }
+    if (value.PUBLIC_RESOURCE_ENABLED) {
+      const publicResource = new URL(value.PUBLIC_RESOURCE_URL);
+      const facilitator = new URL(value.FACILITATOR_ORIGIN);
+      const service = new URL(value.SERVICE_ORIGIN);
+      if (publicResource.origin === facilitator.origin) {
+        context.addIssue({
+          code: "custom",
+          path: ["FACILITATOR_ORIGIN"],
+          message: "The public resource and facilitator must use distinct origins.",
+        });
+      }
+      if (service.origin === facilitator.origin) {
+        context.addIssue({
+          code: "custom",
+          path: ["FACILITATOR_ORIGIN"],
+          message: "The resource server and facilitator must use distinct origins.",
+        });
+      }
+      if (value.NODE_ENV === "production") {
+        for (const [field, url] of [
+          ["PUBLIC_RESOURCE_URL", value.PUBLIC_RESOURCE_URL],
+          ["FACILITATOR_ORIGIN", value.FACILITATOR_ORIGIN],
+        ] as const) {
+          if (new URL(url).protocol !== "https:") {
+            context.addIssue({
+              code: "custom",
+              path: [field],
+              message: `${field} must use HTTPS in production.`,
+            });
+          }
+        }
+      }
+    }
     if (
       value.SETTLEMENT_ENABLED &&
       value.NODE_ENV === "production" &&
@@ -220,6 +291,12 @@ export type AppConfig = {
   readonly oauthJwksUri: string;
   readonly partnerRegistrationEnabled: boolean;
   readonly mcpEnabled: boolean;
+  readonly publicResourceEnabled: boolean;
+  readonly publicResourceUrl: string;
+  readonly publicResourceRouteId: string;
+  readonly facilitatorOrigin: string;
+  readonly facilitatorMerchantApiKey?: string;
+  readonly facilitatorRequestTimeoutMs: number;
   readonly oauthSigningPrivateJwkJson?: string;
   readonly oauthPreviousPublicJwksJson: string;
   readonly oauthAccessTokenTtlSeconds: number;
@@ -268,6 +345,12 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     oauthJwksUri: value.OAUTH_JWKS_URI,
     partnerRegistrationEnabled: value.PARTNER_REGISTRATION_ENABLED,
     mcpEnabled: value.MCP_ENABLED,
+    publicResourceEnabled: value.PUBLIC_RESOURCE_ENABLED,
+    publicResourceUrl: value.PUBLIC_RESOURCE_URL,
+    publicResourceRouteId: value.PUBLIC_RESOURCE_ROUTE_ID,
+    facilitatorOrigin: value.FACILITATOR_ORIGIN.replace(/\/$/, ""),
+    facilitatorMerchantApiKey: value.FACILITATOR_MERCHANT_API_KEY,
+    facilitatorRequestTimeoutMs: value.FACILITATOR_REQUEST_TIMEOUT_MS,
     oauthSigningPrivateJwkJson: value.OAUTH_SIGNING_PRIVATE_JWK_JSON,
     oauthPreviousPublicJwksJson: value.OAUTH_PREVIOUS_PUBLIC_JWKS_JSON,
     oauthAccessTokenTtlSeconds: value.OAUTH_ACCESS_TOKEN_TTL_SECONDS,

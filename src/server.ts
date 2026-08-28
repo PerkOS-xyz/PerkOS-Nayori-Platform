@@ -5,9 +5,11 @@ import { createHiroTransactionBroadcaster } from "./broadcast.js";
 import { loadConfig } from "./config.js";
 import { PostgresDatabase } from "./database.js";
 import { createExternalOAuthAuthenticator } from "./external-oauth.js";
+import { createFacilitatorClient } from "./facilitator-client.js";
 import { consoleLogger } from "./logger.js";
 import { createMcpService } from "./mcp.js";
 import { createOAuthService, createOAuthSigner } from "./oauth.js";
+import { createPaidResourceService } from "./paid-resource.js";
 import { createQuoteSigner } from "./quote-signing.js";
 import { createQuoteService } from "./quotes.js";
 import { createSettlementService } from "./settlement.js";
@@ -54,6 +56,16 @@ const mcpService = config.mcpEnabled
       settlementService,
     })
   : undefined;
+const paidResourceService = config.publicResourceEnabled
+  ? createPaidResourceService({
+      config,
+      facilitator: createFacilitatorClient({
+        origin: config.facilitatorOrigin,
+        merchantApiKey: config.facilitatorMerchantApiKey!,
+        timeoutMs: config.facilitatorRequestTimeoutMs,
+      }),
+    })
+  : undefined;
 const app = createApp({
   config,
   database,
@@ -62,6 +74,7 @@ const app = createApp({
   settlementService,
   oauthService,
   mcpService,
+  paidResourceService,
 });
 
 const server = serve(
@@ -85,6 +98,9 @@ const server = serve(
       oauthMode: config.oauthMode,
       partnerRegistrationEnabled: config.partnerRegistrationEnabled,
       mcpEnabled: config.mcpEnabled,
+      publicResourceEnabled: config.publicResourceEnabled,
+      publicResourceUrl: config.publicResourceEnabled ? config.publicResourceUrl : undefined,
+      facilitatorOrigin: config.publicResourceEnabled ? config.facilitatorOrigin : undefined,
       sponsorshipEnabled: config.sponsorshipEnabled,
     });
   },

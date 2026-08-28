@@ -56,9 +56,47 @@ describe("loadConfig", () => {
     expect(config.settlementEnabled).toBe(false);
     expect(config.reconciliationEnabled).toBe(false);
     expect(config.deliveryLedgerEnabled).toBe(false);
+    expect(config.publicResourceEnabled).toBe(false);
     expect(config.settlementMinConfirmations).toBe(1);
     expect(config.sponsorshipEnabled).toBe(false);
     expect(config.port).toBe(8080);
+  });
+
+  it("requires an isolated facilitator credential for the public resource", () => {
+    expect(() =>
+      loadConfig({
+        ...REQUIRED_ENVIRONMENT,
+        PUBLIC_RESOURCE_ENABLED: "true",
+      }),
+    ).toThrow(/merchant API key/i);
+
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      SERVICE_ORIGIN: "https://api.nayori.ai",
+      PUBLIC_RESOURCE_ENABLED: "true",
+      PUBLIC_RESOURCE_URL: "https://nayori.ai/api/v1",
+      FACILITATOR_ORIGIN: "https://facilitator.nayori.ai/",
+      FACILITATOR_MERCHANT_API_KEY: `ny_mk_${"A".repeat(43)}`,
+    });
+    expect(config.publicResourceEnabled).toBe(true);
+    expect(config.publicResourceUrl).toBe("https://nayori.ai/api/v1");
+    expect(config.facilitatorOrigin).toBe("https://facilitator.nayori.ai");
+  });
+
+  it("rejects a facilitator that shares the resource or API origin", () => {
+    const base = {
+      ...REQUIRED_ENVIRONMENT,
+      PUBLIC_RESOURCE_ENABLED: "true",
+      FACILITATOR_MERCHANT_API_KEY: `ny_mk_${"A".repeat(43)}`,
+    };
+    expect(() => loadConfig({
+      ...base,
+      FACILITATOR_ORIGIN: "https://nayori.ai",
+    })).toThrow(/public resource and facilitator/i);
+    expect(() => loadConfig({
+      ...base,
+      FACILITATOR_ORIGIN: "https://api.nayori.ai",
+    })).toThrow(/resource server and facilitator/i);
   });
 
   it("normalizes the service origin", () => {

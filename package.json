@@ -1,6 +1,6 @@
 {
   "name": "@perkos/nayori-platform",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Private API and reconciliation platform for Nayori x402 payments on Stacks.",
   "type": "module",

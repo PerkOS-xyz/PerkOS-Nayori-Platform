@@ -40,6 +40,11 @@ services:
       OAUTH_JWKS_URI: https://oauth.nayori.ai/oauth/jwks.json
       PARTNER_REGISTRATION_ENABLED: "false"
       MCP_ENABLED: "false"
+      PUBLIC_RESOURCE_ENABLED: "false"
+      PUBLIC_RESOURCE_URL: https://nayori.ai/api/v1
+      PUBLIC_RESOURCE_ROUTE_ID: nayori-capability-report
+      FACILITATOR_ORIGIN: https://facilitator.nayori.ai
+      FACILITATOR_REQUEST_TIMEOUT_MS: 10000
       RELEASE_SHA: local-compose
       SERVICE_ORIGIN: http://localhost:8080
       QUOTE_ISSUANCE_ENABLED: "false"
