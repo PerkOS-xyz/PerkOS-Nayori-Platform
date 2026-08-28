@@ -64,6 +64,10 @@ const environmentSchema = z
     DELIVERY_LEDGER_ENABLED: booleanFlag,
     DELIVERY_RETRY_TTL_SECONDS: z.coerce.number().int().min(300).max(604_800).default(86_400),
     OAUTH_ENABLED: booleanFlag,
+    OAUTH_MODE: z.enum(["embedded", "external"]).default("embedded"),
+    OAUTH_ISSUER_ORIGIN: z.url().default("https://oauth.nayori.ai"),
+    OAUTH_RESOURCE_ORIGIN: z.url().default("https://nayori.ai"),
+    OAUTH_JWKS_URI: z.url().default("https://oauth.nayori.ai/oauth/jwks.json"),
     PARTNER_REGISTRATION_ENABLED: booleanFlag,
     MCP_ENABLED: booleanFlag,
     OAUTH_SIGNING_PRIVATE_JWK_JSON: z.string().min(1).optional(),
@@ -115,7 +119,11 @@ const environmentSchema = z
         message: "The delivery ledger requires reconciliation.",
       });
     }
-    if (value.OAUTH_ENABLED && !value.OAUTH_SIGNING_PRIVATE_JWK_JSON) {
+    if (
+      value.OAUTH_ENABLED &&
+      value.OAUTH_MODE === "embedded" &&
+      !value.OAUTH_SIGNING_PRIVATE_JWK_JSON
+    ) {
       context.addIssue({
         code: "custom",
         path: ["OAUTH_SIGNING_PRIVATE_JWK_JSON"],
@@ -128,6 +136,31 @@ const environmentSchema = z
         path: ["PARTNER_REGISTRATION_ENABLED"],
         message: "Partner registration requires OAuth.",
       });
+    }
+    if (value.PARTNER_REGISTRATION_ENABLED && value.OAUTH_MODE === "external") {
+      context.addIssue({
+        code: "custom",
+        path: ["PARTNER_REGISTRATION_ENABLED"],
+        message: "Partner registration is owned by the external OAuth service.",
+      });
+    }
+    if (value.OAUTH_MODE === "external" && value.OAUTH_ISSUER_ORIGIN === value.OAUTH_RESOURCE_ORIGIN) {
+      context.addIssue({
+        code: "custom",
+        path: ["OAUTH_ISSUER_ORIGIN"],
+        message: "The external OAuth issuer and protected resource must be distinct origins.",
+      });
+    }
+    if (value.OAUTH_ENABLED && value.OAUTH_MODE === "external" && value.NODE_ENV === "production") {
+      for (const [field, url] of [
+        ["OAUTH_ISSUER_ORIGIN", value.OAUTH_ISSUER_ORIGIN],
+        ["OAUTH_RESOURCE_ORIGIN", value.OAUTH_RESOURCE_ORIGIN],
+        ["OAUTH_JWKS_URI", value.OAUTH_JWKS_URI],
+      ] as const) {
+        if (new URL(url).protocol !== "https:") {
+          context.addIssue({ code: "custom", path: [field], message: `${field} must use HTTPS in production.` });
+        }
+      }
     }
     if (value.MCP_ENABLED && !value.OAUTH_ENABLED) {
       context.addIssue({
@@ -181,6 +214,10 @@ export type AppConfig = {
   readonly deliveryLedgerEnabled: boolean;
   readonly deliveryRetryTtlSeconds: number;
   readonly oauthEnabled: boolean;
+  readonly oauthMode: "embedded" | "external";
+  readonly oauthIssuerOrigin: string;
+  readonly oauthResourceOrigin: string;
+  readonly oauthJwksUri: string;
   readonly partnerRegistrationEnabled: boolean;
   readonly mcpEnabled: boolean;
   readonly oauthSigningPrivateJwkJson?: string;
@@ -225,6 +262,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     deliveryLedgerEnabled: value.DELIVERY_LEDGER_ENABLED,
     deliveryRetryTtlSeconds: value.DELIVERY_RETRY_TTL_SECONDS,
     oauthEnabled: value.OAUTH_ENABLED,
+    oauthMode: value.OAUTH_MODE,
+    oauthIssuerOrigin: value.OAUTH_ISSUER_ORIGIN.replace(/\/$/, ""),
+    oauthResourceOrigin: value.OAUTH_RESOURCE_ORIGIN.replace(/\/$/, ""),
+    oauthJwksUri: value.OAUTH_JWKS_URI,
     partnerRegistrationEnabled: value.PARTNER_REGISTRATION_ENABLED,
     mcpEnabled: value.MCP_ENABLED,
     oauthSigningPrivateJwkJson: value.OAUTH_SIGNING_PRIVATE_JWK_JSON,

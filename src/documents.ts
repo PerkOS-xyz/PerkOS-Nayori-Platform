@@ -6,6 +6,18 @@ import type { AppConfig } from "./config.js";
 export const SERVICE_NAME = "nayori-x402-facilitator";
 export const SERVICE_VERSION = "0.5.0";
 
+function oauthIssuer(config: AppConfig): string {
+  return config.oauthMode === "external" ? config.oauthIssuerOrigin : config.serviceOrigin;
+}
+
+function oauthResource(config: AppConfig): string {
+  return config.oauthMode === "external" ? config.oauthResourceOrigin : config.serviceOrigin;
+}
+
+function oauthJwks(config: AppConfig): string {
+  return config.oauthMode === "external" ? config.oauthJwksUri : `${config.serviceOrigin}/oauth/jwks.json`;
+}
+
 function serviceStatus(config: AppConfig) {
   if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
   if (config.reconciliationEnabled) return "testnet-confirmation-ready";
@@ -28,6 +40,7 @@ export function createSupportedDocument(config: AppConfig) {
     confirmationEnabled: config.reconciliationEnabled,
     deliveryLedgerEnabled: config.deliveryLedgerEnabled,
     oauthEnabled: config.oauthEnabled,
+    oauthMode: config.oauthEnabled ? config.oauthMode : "disabled",
     partnerRegistrationEnabled: config.partnerRegistrationEnabled,
     mcpEnabled: config.mcpEnabled,
     resourceDeliveryMode: config.deliveryLedgerEnabled ? "merchant-idempotent" : "unavailable",
@@ -89,12 +102,12 @@ export function createAgentDocument(config: AppConfig) {
         : null,
       llms: `${config.serviceOrigin}/llms.txt`,
       oauthAuthorizationServer: config.oauthEnabled
-        ? `${config.serviceOrigin}/.well-known/oauth-authorization-server`
+        ? `${oauthIssuer(config)}/.well-known/oauth-authorization-server`
         : null,
       oauthProtectedResource: config.oauthEnabled
-        ? `${config.serviceOrigin}/.well-known/oauth-protected-resource`
+        ? `${oauthResource(config)}/.well-known/oauth-protected-resource`
         : null,
-      authGuide: config.oauthEnabled ? `${config.serviceOrigin}/auth.md` : null,
+      authGuide: config.oauthEnabled ? `${oauthResource(config)}/auth.md` : null,
       mcpServerCard: config.mcpEnabled
         ? `${config.serviceOrigin}/.well-known/mcp/server-card.json`
         : null,
@@ -117,31 +130,32 @@ export function createAgentDocument(config: AppConfig) {
 }
 
 export function createOAuthAuthorizationServerMetadata(config: AppConfig) {
+  const issuer = oauthIssuer(config);
   return {
-    issuer: config.serviceOrigin,
-    token_endpoint: `${config.serviceOrigin}/oauth/token`,
-    jwks_uri: `${config.serviceOrigin}/oauth/jwks.json`,
+    issuer,
+    token_endpoint: `${issuer}/oauth/token`,
+    jwks_uri: oauthJwks(config),
     grant_types_supported: ["client_credentials"],
     response_types_supported: [],
     token_endpoint_auth_methods_supported: ["client_secret_basic"],
     scopes_supported: oauthScopes,
-    service_documentation: `${config.serviceOrigin}/auth.md`,
+    service_documentation: `${oauthResource(config)}/auth.md`,
   } as const;
 }
 
 export function createOAuthProtectedResourceMetadata(config: AppConfig) {
   return {
-    resource: config.serviceOrigin,
-    authorization_servers: [config.serviceOrigin],
-    jwks_uri: `${config.serviceOrigin}/oauth/jwks.json`,
+    resource: oauthResource(config),
+    authorization_servers: [oauthIssuer(config)],
+    jwks_uri: oauthJwks(config),
     scopes_supported: oauthScopes,
     bearer_methods_supported: ["header"],
-    resource_documentation: `${config.serviceOrigin}/auth.md`,
+    resource_documentation: `${oauthResource(config)}/auth.md`,
   } as const;
 }
 
 export function createAuthMarkdown(config: AppConfig): string {
-  return `# Nayori API authentication
+  return `# Auth.md — Nayori agent authentication
 
 Nayori supports OAuth 2.0 client credentials for invited partners and existing merchant API keys
 for backward compatibility. Partner enrollment is bound to a Stacks wallet by an exact plaintext
@@ -149,10 +163,10 @@ message signed in Leather. The API never requests or stores a wallet private key
 
 ## Discovery
 
-- Authorization server: ${config.serviceOrigin}/.well-known/oauth-authorization-server
-- Protected resource: ${config.serviceOrigin}/.well-known/oauth-protected-resource
-- Token endpoint: ${config.serviceOrigin}/oauth/token
-- OAuth JWKS: ${config.serviceOrigin}/oauth/jwks.json
+- Authorization server: ${oauthIssuer(config)}/.well-known/oauth-authorization-server
+- Protected resource: ${oauthResource(config)}/.well-known/oauth-protected-resource
+- Token endpoint: ${oauthIssuer(config)}/oauth/token
+- OAuth JWKS: ${oauthJwks(config)}
 
 OAuth authorizes API and MCP access. A buyer still signs each STX, sBTC or USDCx payment
 transaction separately in its wallet; an OAuth token cannot sign or approve a payment.
@@ -166,6 +180,7 @@ export function createMcpServerCard(config: AppConfig) {
   return {
     schemaVersion: "1.0",
     name: "Nayori x402 MCP Server",
+    serverInfo: { name: "nayori-x402", version: SERVICE_VERSION },
     description: "Experimental authenticated MCP access to Nayori x402 discovery, quotes and settlement status.",
     status: "experimental",
     server: {
@@ -175,11 +190,11 @@ export function createMcpServerCard(config: AppConfig) {
     },
     authentication: {
       type: "oauth2",
-      protectedResourceMetadata: `${config.serviceOrigin}/.well-known/oauth-protected-resource`,
+      protectedResourceMetadata: `${oauthResource(config)}/.well-known/oauth-protected-resource`,
       requiredScopes: ["mcp:invoke"],
     },
     capabilities: { tools: true, prompts: false, resources: false },
-    documentation: `${config.serviceOrigin}/auth.md`,
+    documentation: `${oauthResource(config)}/auth.md`,
   } as const;
 }
 
@@ -231,17 +246,19 @@ export function createOpenApiDocument(config: AppConfig) {
     paths["/oauth/jwks.json"] = {
       get: { operationId: "getOAuthVerificationKeys", responses: jsonResponse },
     };
-    paths["/oauth/token"] = {
-      post: {
-        operationId: "issueOAuthClientCredentialsToken",
-        security: [{ oauthClientBasic: [] }],
-        responses: {
-          "200": { description: "A short-lived scoped access token was issued" },
-          "400": { description: "Grant or scope request is invalid" },
-          "401": { description: "Client authentication failed" },
+    if (config.oauthMode === "embedded") {
+      paths["/oauth/token"] = {
+        post: {
+          operationId: "issueOAuthClientCredentialsToken",
+          security: [{ oauthClientBasic: [] }],
+          responses: {
+            "200": { description: "A short-lived scoped access token was issued" },
+            "400": { description: "Grant or scope request is invalid" },
+            "401": { description: "Client authentication failed" },
+          },
         },
-      },
-    };
+      };
+    }
   }
 
   if (config.partnerRegistrationEnabled) {
@@ -409,7 +426,7 @@ export function createOpenApiDocument(config: AppConfig) {
           type: "oauth2",
           flows: {
             clientCredentials: {
-              tokenUrl: `${config.serviceOrigin}/oauth/token`,
+              tokenUrl: `${oauthIssuer(config)}/oauth/token`,
               scopes: Object.fromEntries(oauthScopes.map((scope) => [scope, `Allows ${scope}`])),
             },
           },
@@ -435,6 +452,7 @@ Reconciliation enabled: ${config.reconciliationEnabled}
 Minimum confirmations: ${config.settlementMinConfirmations}
 Delivery ledger enabled: ${config.deliveryLedgerEnabled}
 OAuth enabled: ${config.oauthEnabled}
+OAuth mode: ${config.oauthEnabled ? config.oauthMode : "disabled"}
 Partner registration enabled: ${config.partnerRegistrationEnabled}
 MCP enabled: ${config.mcpEnabled}
 Sponsorship enabled: false

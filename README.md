@@ -5,9 +5,10 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at the **invite-only partner pilot and testnet settlement boundary**. It
-provides wallet-linked OAuth enrollment, backward-compatible merchant API keys, a scoped MCP
-endpoint, request-bound quotes, the pinned SDK verifier, durable reservation, one Stacks testnet
+This repository is at the **external-OAuth resource-server and testnet settlement boundary**. It
+validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
+merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
+verifier, durable reservation, one Stacks testnet
 broadcast attempt, leased reconciliation, canonical confirmation-depth checks and signed
 settlement receipts.
 
@@ -19,18 +20,19 @@ URLs. Mainnet and sponsorship remain disabled. M1 contracts and deployments are 
 ## Architecture
 
 ```text
-Agent / Leather
+Agent / Leather ---> oauth.nayori.ai (issuer / JWKS)
       |
       v
-Resource server ---- merchant auth ----> api.nayori.ai
-                                           |       |
-                                      PostgreSQL  Stacks/Hiro
-                                           |
-                                    reconciliation worker
+nayori.ai (resource identity) ---> api.nayori.ai (API / MCP / x402)
+                                          |       |
+                                     PostgreSQL  Stacks/Hiro
+                                          |
+                                   reconciliation worker
 ```
 
-The API and reconciliation worker are separate runtime entrypoints within one TypeScript service. The
-database is dedicated to Nayori and must not reuse another PerkOS product database.
+The API and reconciliation worker are separate runtime entrypoints within one TypeScript service.
+The database is dedicated to Nayori and must not reuse another PerkOS product database. OAuth
+client state and signing material belong to the separate private `PerkOS-Nayori-OAuth` service.
 
 ## Implemented endpoints
 
@@ -44,13 +46,13 @@ database is dedicated to Nayori and must not reuse another PerkOS product databa
 | `GET /.well-known/jwks.json` | Public Ed25519 quote-verification keys when issuance is enabled |
 | `GET /llms.txt` | Agent-readable usage and safety guidance |
 | `GET /openapi.json` | OpenAPI document containing only implemented routes |
-| `GET /.well-known/oauth-authorization-server` | OAuth authorization-server metadata (RFC 8414) |
-| `GET /.well-known/oauth-protected-resource` | OAuth protected-resource metadata (RFC 9728) |
-| `GET /oauth/jwks.json` | Public Ed25519 access-token verification keys |
+| `GET /.well-known/oauth-authorization-server` | Redirect to the external RFC 8414 issuer in external mode |
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 metadata for canonical resource `nayori.ai` |
+| `GET /oauth/jwks.json` | Redirect to the external issuer JWKS in external mode |
 | `GET /auth.md` | Agent-readable authentication and wallet-signing boundary |
-| `POST /oauth/token` | `client_credentials` tokens using `client_secret_basic` |
-| `POST /v1/partners/challenges` | Creates an invitation-bound Leather signing challenge |
-| `POST /v1/partners/register` | Consumes the signed challenge and returns client credentials once |
+| `POST /oauth/token` | Embedded rollback mode only; external clients call `oauth.nayori.ai` directly |
+| `POST /v1/partners/challenges` | External OAuth service only; unavailable on Platform in external mode |
+| `POST /v1/partners/register` | External OAuth service only; unavailable on Platform in external mode |
 | `GET /.well-known/mcp/server-card.json` | Experimental MCP server card |
 | `POST /mcp` | Authenticated Streamable HTTP JSON-RPC with implemented Nayori tools |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
@@ -65,9 +67,10 @@ Quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. Verify is
 `SETTLEMENT_ENABLED=true`; delivery routes are absent unless `DELIVERY_LEDGER_ENABLED=true`. No
 placeholder capability is advertised.
 
-OAuth, partner registration and MCP are independently fail-closed. OAuth authorizes API access;
-it cannot sign a payment. Every STX, sBTC or USDCx transfer remains a separate wallet-approved
-transaction.
+OAuth and MCP are independently fail-closed. In external mode Platform fetches only public JWKS,
+validates EdDSA, issuer, audience, lifetime and scopes, then requires its own merchant to remain
+active. OAuth authorizes API access; it cannot sign a payment. Every STX, sBTC or USDCx transfer
+remains a separate wallet-approved transaction.
 
 ## Requirements
 
@@ -132,10 +135,12 @@ See [`.env.example`](.env.example). Important fail-closed settings:
   worker load and crash recovery.
 - `DELIVERY_LEDGER_ENABLED=true` requires reconciliation. `DELIVERY_RETRY_TTL_SECONDS` limits how
   long an unclaimed confirmed delivery remains claimable.
-- `OAUTH_ENABLED=true` requires a dedicated Ed25519 private JWK that is not reused for quote
-  signing. Access tokens last 60–900 seconds.
-- `PARTNER_REGISTRATION_ENABLED=true` requires OAuth and exposes only invitation-bound enrollment.
-  Challenges expire after 60–600 seconds and are consumed atomically with the invitation.
+- `OAUTH_ENABLED=true` plus `OAUTH_MODE=external` validates tokens from
+  `OAUTH_ISSUER_ORIGIN` against `OAUTH_RESOURCE_ORIGIN` with `OAUTH_JWKS_URI`; Platform does not
+  receive the issuer private key.
+- `OAUTH_MODE=embedded` remains a rollback option and requires a dedicated Ed25519 private JWK.
+- `PARTNER_REGISTRATION_ENABLED` must remain false in external mode because enrollment is owned by
+  `PerkOS-Nayori-OAuth`.
 - `MCP_ENABLED=true` requires OAuth. The endpoint checks `mcp:invoke`, while quote and settlement
   tools also enforce their own downstream scopes and merchant isolation.
 - `SPONSORSHIP_ENABLED` accepts only `false` or `0` in this release.
@@ -169,13 +174,18 @@ the server, so the quote request cannot redirect funds or change price.
 
 ## Invite-only partner OAuth pilot
 
-Generate a distinct OAuth signing key outside GitHub:
+The active issuer, client-credential database, signing-key rotation and invitation commands live in
+the private [`PerkOS-Nayori-OAuth`](https://github.com/PerkOS-xyz/PerkOS-Nayori-OAuth) repository.
+Platform stores neither the external OAuth private JWK nor external client secrets. The former
+embedded implementation remains available only for rollback while migration is verified.
+
+For embedded rollback mode only, generate a distinct OAuth signing key outside GitHub:
 
 ```bash
 npm run oauth:keygen
 ```
 
-After migrations and merchant provisioning, create a single-use invitation by setting
+In embedded rollback mode, after migrations and merchant provisioning, create a single-use invitation by setting
 `PARTNER_MERCHANT_ID`, `PARTNER_SCOPES`, `PARTNER_INVITATION_TTL_SECONDS` and the normal database
 configuration, then run:
 
@@ -248,7 +258,8 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
 5. SDK 0.3 paying flow and Platform verifier pin — complete; external clean-room remains a
    separate adoption gate.
 6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — this release.
-7. Isolated sponsor relay only after the non-sponsored path passes review.
+7. Separate authorization server and external JWT/JWKS resource verification — this release.
+8. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
 [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)
@@ -256,6 +267,7 @@ and [`docs/plans/2026-08-27-testnet-settlement-design.md`](docs/plans/2026-08-27
 and [`docs/plans/2026-08-27-reconciliation-receipts-delivery-design.md`](docs/plans/2026-08-27-reconciliation-receipts-delivery-design.md)
 and [`docs/plans/2026-08-27-sdk-0.3-isolated-e2e-gate-design.md`](docs/plans/2026-08-27-sdk-0.3-isolated-e2e-gate-design.md)
 and [`docs/plans/2026-08-27-partner-pilot-oauth-mcp-design.md`](docs/plans/2026-08-27-partner-pilot-oauth-mcp-design.md)
+and [`docs/plans/2026-08-27-external-oauth-resource-server-design.md`](docs/plans/2026-08-27-external-oauth-resource-server-design.md)
 for the approved designs and security boundaries.
 
 ## Milestone 2 alignment
