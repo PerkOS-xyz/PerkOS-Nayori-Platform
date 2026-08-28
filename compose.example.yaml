@@ -34,6 +34,10 @@ services:
       PAYMENT_RATE_LIMIT_PER_MINUTE: 60
       PAYMENT_VERIFICATION_ENABLED: "false"
       OAUTH_ENABLED: "false"
+      OAUTH_MODE: embedded
+      OAUTH_ISSUER_ORIGIN: https://oauth.nayori.ai
+      OAUTH_RESOURCE_ORIGIN: https://nayori.ai
+      OAUTH_JWKS_URI: https://oauth.nayori.ai/oauth/jwks.json
       PARTNER_REGISTRATION_ENABLED: "false"
       MCP_ENABLED: "false"
       RELEASE_SHA: local-compose

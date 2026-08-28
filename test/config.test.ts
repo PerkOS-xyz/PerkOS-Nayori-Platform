@@ -23,6 +23,28 @@ describe("loadConfig", () => {
     ).toThrow(/requires OAuth/);
   });
 
+  it("accepts external OAuth without importing its signing key", () => {
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      OAUTH_ENABLED: "true",
+      OAUTH_MODE: "external",
+      MCP_ENABLED: "true",
+    });
+    expect(config.oauthMode).toBe("external");
+    expect(config.oauthIssuerOrigin).toBe("https://oauth.nayori.ai");
+    expect(config.oauthResourceOrigin).toBe("https://nayori.ai");
+    expect(config.oauthSigningPrivateJwkJson).toBeUndefined();
+  });
+
+  it("prevents Platform from owning registration in external OAuth mode", () => {
+    expect(() => loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      OAUTH_ENABLED: "true",
+      OAUTH_MODE: "external",
+      PARTNER_REGISTRATION_ENABLED: "true",
+    })).toThrow(/owned by the external OAuth service/i);
+  });
+
   it("uses fail-closed foundation defaults", () => {
     const config = loadConfig(REQUIRED_ENVIRONMENT);
 

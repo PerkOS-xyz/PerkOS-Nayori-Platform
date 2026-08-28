@@ -108,7 +108,54 @@ describe("OAuth and MCP discovery routes", () => {
       authorization_servers: ["https://api.nayori.ai"],
     });
     expect(authGuide.headers.get("content-type")).toContain("text/markdown");
-    expect(await card.json()).toMatchObject({ server: { url: "https://api.nayori.ai/mcp" } });
+    expect(await card.json()).toMatchObject({
+      serverInfo: { name: "nayori-x402", version: "0.5.0" },
+      server: { url: "https://api.nayori.ai/mcp" },
+    });
     expect(await mcp.json()).toMatchObject({ result: { ok: true } });
+  });
+
+  it("publishes the apex resource and redirects issuer-owned routes in external mode", async () => {
+    const config = loadConfig({
+      DATABASE_URL: "postgresql://nayori:test@localhost:5432/nayori_test",
+      NODE_ENV: "test",
+      SERVICE_ORIGIN: "https://api.nayori.ai",
+      OAUTH_ENABLED: "true",
+      OAUTH_MODE: "external",
+      MCP_ENABLED: "true",
+    });
+    const app = createApp({
+      config,
+      database: new FakeDatabase(),
+      logger,
+      mcpService,
+    });
+
+    const authorization = await app.request("/.well-known/oauth-authorization-server");
+    const resource = await app.request("/.well-known/oauth-protected-resource");
+    const authGuide = await app.request("/auth.md");
+    const jwks = await app.request("/oauth/jwks.json");
+    const token = await app.request("/oauth/token", { method: "POST" });
+    const card = await app.request("/.well-known/mcp/server-card.json");
+
+    expect(authorization.status).toBe(308);
+    expect(authorization.headers.get("location")).toBe(
+      "https://oauth.nayori.ai/.well-known/oauth-authorization-server",
+    );
+    expect(await resource.json()).toMatchObject({
+      resource: "https://nayori.ai",
+      authorization_servers: ["https://oauth.nayori.ai"],
+      jwks_uri: "https://oauth.nayori.ai/oauth/jwks.json",
+    });
+    expect(await authGuide.text()).toMatch(/^# Auth\.md — Nayori agent authentication/);
+    expect(jwks.status).toBe(308);
+    expect(jwks.headers.get("location")).toBe("https://oauth.nayori.ai/oauth/jwks.json");
+    expect(token.status).toBe(404);
+    expect(await card.json()).toMatchObject({
+      serverInfo: { name: "nayori-x402" },
+      authentication: {
+        protectedResourceMetadata: "https://nayori.ai/.well-known/oauth-protected-resource",
+      },
+    });
   });
 });

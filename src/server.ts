@@ -4,6 +4,7 @@ import { createApp } from "./app.js";
 import { createHiroTransactionBroadcaster } from "./broadcast.js";
 import { loadConfig } from "./config.js";
 import { PostgresDatabase } from "./database.js";
+import { createExternalOAuthAuthenticator } from "./external-oauth.js";
 import { consoleLogger } from "./logger.js";
 import { createMcpService } from "./mcp.js";
 import { createOAuthService, createOAuthSigner } from "./oauth.js";
@@ -14,16 +15,23 @@ import { createSettlementService } from "./settlement.js";
 const config = loadConfig();
 const database = new PostgresDatabase(config);
 const quoteSigner = config.quoteIssuanceEnabled ? await createQuoteSigner(config) : undefined;
-const oauthSigner = config.oauthEnabled ? await createOAuthSigner(config) : undefined;
-const oauthService = config.oauthEnabled
+const oauthSigner = config.oauthEnabled && config.oauthMode === "embedded"
+  ? await createOAuthSigner(config)
+  : undefined;
+const oauthService = config.oauthEnabled && config.oauthMode === "embedded"
   ? createOAuthService({ config, store: database, signer: oauthSigner! })
+  : undefined;
+const oauthAuthenticator = config.oauthEnabled
+  ? config.oauthMode === "external"
+    ? createExternalOAuthAuthenticator({ config, store: database })
+    : oauthService!
   : undefined;
 const quoteService = config.quoteIssuanceEnabled
   ? createQuoteService({
       config,
       store: database,
       signer: quoteSigner!,
-      ...(oauthService ? { authenticator: oauthService } : {}),
+      ...(oauthAuthenticator ? { authenticator: oauthAuthenticator } : {}),
     })
   : undefined;
 const settlementService = config.paymentVerificationEnabled
@@ -35,13 +43,13 @@ const settlementService = config.paymentVerificationEnabled
         ? { broadcaster: createHiroTransactionBroadcaster({ config }) }
         : {}),
       ...(config.deliveryLedgerEnabled ? { deliveryStore: database } : {}),
-      ...(oauthService ? { authenticator: oauthService } : {}),
+      ...(oauthAuthenticator ? { authenticator: oauthAuthenticator } : {}),
     })
   : undefined;
 const mcpService = config.mcpEnabled
   ? createMcpService({
       config,
-      authenticator: oauthService!,
+      authenticator: oauthAuthenticator!,
       quoteService,
       settlementService,
     })
@@ -74,6 +82,7 @@ const server = serve(
       reconciliationEnabled: config.reconciliationEnabled,
       deliveryLedgerEnabled: config.deliveryLedgerEnabled,
       oauthEnabled: config.oauthEnabled,
+      oauthMode: config.oauthMode,
       partnerRegistrationEnabled: config.partnerRegistrationEnabled,
       mcpEnabled: config.mcpEnabled,
       sponsorshipEnabled: config.sponsorshipEnabled,
