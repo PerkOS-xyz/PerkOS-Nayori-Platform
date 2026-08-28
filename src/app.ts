@@ -21,6 +21,16 @@ import {
 import type { AppLogger } from "./logger.js";
 import { McpAuthenticationError, type McpService } from "./mcp.js";
 import { OAuthServiceError, type OAuthService } from "./oauth.js";
+import {
+  NAYORI_SETTLEMENT_HEADER,
+  NAYORI_SIGNED_QUOTE_HEADER,
+  PAYMENT_REQUIRED_HEADER,
+  PAYMENT_RESPONSE_HEADER,
+  PAYMENT_SIGNATURE_HEADER,
+  PaidResourceError,
+  type PaidResourceResult,
+  type PaidResourceService,
+} from "./paid-resource.js";
 import { QuoteServiceError, type QuoteService } from "./quotes.js";
 import { SettlementServiceError, type SettlementService } from "./settlement.js";
 
@@ -36,6 +46,7 @@ export type CreateAppOptions = {
   readonly settlementService?: SettlementService;
   readonly oauthService?: OAuthService;
   readonly mcpService?: McpService;
+  readonly paidResourceService?: PaidResourceService;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -54,7 +65,16 @@ function bearerChallenge(config: AppConfig, realm: string, scope?: string): stri
 }
 
 export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVariables }> {
-  const { config, database, logger, quoteService, settlementService, oauthService, mcpService } = options;
+  const {
+    config,
+    database,
+    logger,
+    quoteService,
+    settlementService,
+    oauthService,
+    mcpService,
+    paidResourceService,
+  } = options;
   if (config.quoteIssuanceEnabled && !quoteService) {
     throw new Error("Quote issuance is enabled without a quote service.");
   }
@@ -66,6 +86,9 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
   }
   if (config.mcpEnabled && !mcpService) {
     throw new Error("MCP is enabled without an MCP service.");
+  }
+  if (config.publicResourceEnabled && !paidResourceService) {
+    throw new Error("The public paid resource is enabled without a resource service.");
   }
   const app = new Hono<{ Variables: AppVariables }>();
 
@@ -185,6 +208,124 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
   app.get("/.well-known/agent.json", (context) => context.json(createAgentDocument(config)));
   app.get("/openapi.json", (context) => context.json(createOpenApiDocument(config)));
   app.get("/llms.txt", (context) => context.text(createLlmsText(config)));
+
+  if (config.publicResourceEnabled && paidResourceService) {
+    const exposeHeaders = [
+      PAYMENT_REQUIRED_HEADER,
+      PAYMENT_RESPONSE_HEADER,
+      NAYORI_SETTLEMENT_HEADER,
+      "Location",
+      "Retry-After",
+      "X-Request-Id",
+    ].join(", ");
+
+    app.options("/v1", (context) => {
+      context.header("access-control-allow-origin", "*");
+      context.header("access-control-allow-methods", "GET, OPTIONS");
+      context.header(
+        "access-control-allow-headers",
+        `Accept, Content-Type, ${PAYMENT_SIGNATURE_HEADER}, ${NAYORI_SIGNED_QUOTE_HEADER}, X-Request-Id`,
+      );
+      context.header("access-control-expose-headers", exposeHeaders);
+      context.header("access-control-max-age", "600");
+      return context.body(null, 204);
+    });
+
+    app.get("/v1", async (context) => {
+      context.header("access-control-allow-origin", "*");
+      context.header("access-control-expose-headers", exposeHeaders);
+      const requestId = context.get("requestId");
+      const search = new URL(context.req.url).searchParams;
+      const settlementValues = search.getAll("settlement");
+      const unsupportedQuery = [...search.keys()].some((key) => key !== "settlement");
+      const settlementId = settlementValues[0];
+      const paymentSignature = context.req.header(PAYMENT_SIGNATURE_HEADER);
+      const signedQuote = context.req.header(NAYORI_SIGNED_QUOTE_HEADER);
+
+      if (unsupportedQuery || settlementValues.length > 1 || (settlementValues.length === 1 && !settlementId)) {
+        return context.json(
+          errorBody(
+            "invalid_resource_query",
+            "Only one non-empty settlement query parameter is accepted.",
+            requestId,
+          ),
+          400,
+        );
+      }
+      if (signedQuote && !paymentSignature) {
+        return context.json(
+          errorBody(
+            "orphan_signed_quote",
+            `${NAYORI_SIGNED_QUOTE_HEADER} is accepted only with PAYMENT-SIGNATURE.`,
+            requestId,
+          ),
+          400,
+        );
+      }
+      if (settlementId && paymentSignature) {
+        return context.json(
+          errorBody(
+            "ambiguous_payment_request",
+            "Use either PAYMENT-SIGNATURE to submit a payment or settlement to poll it, not both.",
+            requestId,
+          ),
+          400,
+        );
+      }
+
+      try {
+        let result: PaidResourceResult | null = null;
+        if (settlementId) {
+          result = await paidResourceService.retrieve(settlementId, requestId);
+        } else if (paymentSignature) {
+          if (!signedQuote) {
+            throw new PaidResourceError(
+              "missing_signed_quote",
+              `${NAYORI_SIGNED_QUOTE_HEADER} is required with PAYMENT-SIGNATURE.`,
+              400,
+            );
+          }
+          result = await paidResourceService.submit(paymentSignature, signedQuote, requestId);
+        }
+
+        if (!result) {
+          const challenge = await paidResourceService.createChallenge(requestId);
+          context.header(PAYMENT_REQUIRED_HEADER, challenge.encodedPaymentRequired);
+          return context.json(challenge.paymentRequired, 402);
+        }
+        if (result.state === "pending") {
+          const location = `${config.publicResourceUrl}?settlement=${encodeURIComponent(result.settlement.settlementId)}`;
+          context.header("location", location);
+          context.header("retry-after", "5");
+          context.header(NAYORI_SETTLEMENT_HEADER, result.settlement.settlementId);
+          return context.json(
+            {
+              status: result.settlement.status,
+              settlementId: result.settlement.settlementId,
+              transaction: result.settlement.txid,
+              confirmed: false,
+              poll: location,
+            },
+            202,
+          );
+        }
+        context.header(PAYMENT_RESPONSE_HEADER, result.encodedPaymentResponse);
+        return context.json(result.body);
+      } catch (error) {
+        if (!(error instanceof PaidResourceError)) throw error;
+        if (error.retryAfterSeconds) {
+          context.header("retry-after", String(error.retryAfterSeconds));
+        }
+        logger.info({
+          event: "public_resource_rejected",
+          requestId,
+          code: error.code,
+          status: error.status,
+        });
+        return context.json(errorBody(error.code, error.publicMessage, requestId), error.status);
+      }
+    });
+  }
 
   if (config.oauthEnabled) {
     app.get("/.well-known/oauth-authorization-server", (context) => {

@@ -5,12 +5,14 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at the **external-OAuth resource-server and testnet settlement boundary**. It
+This repository is at the **same-origin paid-resource, external-OAuth and testnet settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
 merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
 verifier, durable reservation, one Stacks testnet
 broadcast attempt, leased reconciliation, canonical confirmation-depth checks and signed
-settlement receipts.
+settlement receipts. A resource-server runtime can now expose the real x402 v2 payment flow at
+`api.nayori.ai/v1`, while a separately configured runtime owns settlement at
+`facilitator.nayori.ai`.
 
 All write capabilities remain disabled by default. `broadcast` and `pending` are unconfirmed and
 cannot create a receipt or delivery record. Once confirmed, the merchant resource server uses a
@@ -20,18 +22,26 @@ URLs. Mainnet and sponsorship remain disabled. M1 contracts and deployments are 
 ## Architecture
 
 ```text
-Agent / Leather ---> oauth.nayori.ai (issuer / JWKS)
-      |
-      v
-nayori.ai (resource identity) ---> api.nayori.ai (API / MCP / x402)
-                                          |       |
-                                     PostgreSQL  Stacks/Hiro
-                                          |
-                                   reconciliation worker
+Agent / Leather ---> nayori.ai/api/v1 (same-origin proxy)
+                              |
+                              v
+                    api.nayori.ai/v1 (paid resource)
+                              |
+                    merchant-authenticated HTTPS
+                              v
+                  facilitator.nayori.ai (quote / verify / settle)
+                              |                 |
+                         PostgreSQL        Stacks/Hiro testnet
+                              |
+                      reconciliation worker
+
+Agent / framework ---> oauth.nayori.ai (issuer / JWKS) ---> api.nayori.ai (MCP / partner API)
 ```
 
-The API and reconciliation worker are separate runtime entrypoints within one TypeScript service.
-The database is dedicated to Nayori and must not reuse another PerkOS product database. OAuth
+The resource server, facilitator and reconciliation worker are isolated runtime roles built from
+one TypeScript service. The resource server holds only its facilitator merchant credential; quote
+signing, settlement state and the delivery ledger remain on the facilitator. The database is
+dedicated to Nayori and must not reuse another PerkOS product database. OAuth
 client state and signing material belong to the separate private `PerkOS-Nayori-OAuth` service.
 
 ## Implemented endpoints
@@ -55,12 +65,19 @@ client state and signing material belong to the separate private `PerkOS-Nayori-
 | `POST /v1/partners/register` | External OAuth service only; unavailable on Platform in external mode |
 | `GET /.well-known/mcp/server-card.json` | Experimental MCP server card |
 | `POST /mcp` | Authenticated Streamable HTTP JSON-RPC with implemented Nayori tools |
+| `GET /v1` | Public x402 v2 challenge, payment submission, asynchronous polling and confirmed capability-report delivery |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
 | `POST /v1/x402/verify` | Authenticated verify-only check; never broadcasts |
 | `POST /v1/x402/settle` | Reserves and broadcasts once on testnet; returns unconfirmed state |
 | `GET /v1/x402/settlements/:id` | Merchant-isolated status for a reserved settlement |
 | `POST /v1/x402/settlements/:id/delivery/claim` | Claims the stable delivery ID and signed receipt |
 | `POST /v1/x402/settlements/:id/delivery/complete` | Records an idempotent response digest |
+
+The public `GET /v1` route is absent while `PUBLIC_RESOURCE_ENABLED=false`. Its 402 challenge uses
+`PAYMENT-REQUIRED`; payment submission uses `PAYMENT-SIGNATURE` plus the explicitly advertised
+`X-NAYORI-SIGNED-QUOTE` extension. A submitted Stacks transaction returns 202 and a polling URL
+until canonical confirmation. Only a confirmed settlement returns the resource with
+`PAYMENT-RESPONSE`.
 
 Quote and JWKS routes are absent while `QUOTE_ISSUANCE_ENABLED=false`. Verify is absent unless
 `PAYMENT_VERIFICATION_ENABLED=true`; settle and status are absent unless
@@ -143,6 +160,12 @@ See [`.env.example`](.env.example). Important fail-closed settings:
   `PerkOS-Nayori-OAuth`.
 - `MCP_ENABLED=true` requires OAuth. The endpoint checks `mcp:invoke`, while quote and settlement
   tools also enforce their own downstream scopes and merchant isolation.
+- `PUBLIC_RESOURCE_ENABLED=true` enables the resource-server role and requires
+  `FACILITATOR_MERCHANT_API_KEY`. `PUBLIC_RESOURCE_URL`, `PUBLIC_RESOURCE_ROUTE_ID` and
+  `FACILITATOR_ORIGIN` bind the public route to a separately hosted facilitator. The resource,
+  API and facilitator origins must remain distinct; production origins require HTTPS.
+- `FACILITATOR_REQUEST_TIMEOUT_MS` bounds every server-to-server facilitator call. The merchant
+  credential is never returned to the payer, browser or same-origin proxy.
 - `SPONSORSHIP_ENABLED` accepts only `false` or `0` in this release.
 - `DATABASE_URL` must use `postgres://` or `postgresql://`.
 - `SERVICE_ORIGIN` controls canonical discovery URLs.
@@ -245,7 +268,9 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
   Operators must select a confirmation depth appropriate to the asset and environment.
 - The delivery ledger makes retries idempotent by delivery ID, but the merchant resource server must
   enforce that key around its own external side effects.
-- Mainnet, transaction sponsorship and automatic resource proxying remain unavailable.
+- Mainnet and transaction sponsorship remain unavailable. The only automatic delivery is the
+  fixed Nayori capability report after confirmed testnet settlement; arbitrary URL proxying remains
+  unavailable.
 - MCP Server Cards remain an experimental ecosystem extension; the card truthfully advertises
   only the implemented Streamable HTTP tools.
 
@@ -257,9 +282,10 @@ persists only normalized evidence and a raw-transaction digest before broadcasti
 4. Reconciliation worker, confirmation receipts and delivery ledger — complete.
 5. SDK 0.3 paying flow and Platform verifier pin — complete; external clean-room remains a
    separate adoption gate.
-6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — this release.
-7. Separate authorization server and external JWT/JWKS resource verification — this release.
-8. Isolated sponsor relay only after the non-sponsored path passes review.
+6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — complete.
+7. Separate authorization server and external JWT/JWKS resource verification — complete.
+8. Same-origin public x402 resource with an isolated facilitator and confirmation-gated delivery — this release.
+9. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
 [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)

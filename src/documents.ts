@@ -4,7 +4,7 @@ import { oauthScopes } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.5.0";
+export const SERVICE_VERSION = "0.6.0";
 
 function oauthIssuer(config: AppConfig): string {
   return config.oauthMode === "external" ? config.oauthIssuerOrigin : config.serviceOrigin;
@@ -19,6 +19,7 @@ function oauthJwks(config: AppConfig): string {
 }
 
 function serviceStatus(config: AppConfig) {
+  if (config.publicResourceEnabled) return "public-x402-resource";
   if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
   if (config.reconciliationEnabled) return "testnet-confirmation-ready";
   if (config.settlementEnabled) return "testnet-settlement-broadcast";
@@ -43,10 +44,24 @@ export function createSupportedDocument(config: AppConfig) {
     oauthMode: config.oauthEnabled ? config.oauthMode : "disabled",
     partnerRegistrationEnabled: config.partnerRegistrationEnabled,
     mcpEnabled: config.mcpEnabled,
-    resourceDeliveryMode: config.deliveryLedgerEnabled ? "merchant-idempotent" : "unavailable",
+    publicResourceEnabled: config.publicResourceEnabled,
+    publicResource: config.publicResourceEnabled
+      ? {
+          url: config.publicResourceUrl,
+          facilitator: config.facilitatorOrigin,
+          settlement: "asynchronous-confirmation",
+        }
+      : null,
+    resourceDeliveryMode: config.publicResourceEnabled
+      ? "facilitator-backed-idempotent"
+      : config.deliveryLedgerEnabled
+        ? "merchant-idempotent"
+        : "unavailable",
     sponsorshipEnabled: config.sponsorshipEnabled,
-    networks: config.quoteIssuanceEnabled ? [STACKS_X402_NETWORKS[config.stacksNetwork]] : [],
-    mechanisms: config.quoteIssuanceEnabled
+    networks: config.quoteIssuanceEnabled || config.publicResourceEnabled
+      ? [STACKS_X402_NETWORKS[config.stacksNetwork]]
+      : [],
+    mechanisms: config.quoteIssuanceEnabled || config.publicResourceEnabled
       ? [
           {
             scheme: "exact",
@@ -111,6 +126,8 @@ export function createAgentDocument(config: AppConfig) {
       mcpServerCard: config.mcpEnabled
         ? `${config.serviceOrigin}/.well-known/mcp/server-card.json`
         : null,
+      paidResource: config.publicResourceEnabled ? config.publicResourceUrl : null,
+      facilitator: config.publicResourceEnabled ? config.facilitatorOrigin : null,
       sdk: "https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK",
     },
     availability: {
@@ -120,11 +137,16 @@ export function createAgentDocument(config: AppConfig) {
       settle: config.settlementEnabled,
       confirmation: config.reconciliationEnabled,
       deliveryLedger: config.deliveryLedgerEnabled,
-      resourceDelivery: config.deliveryLedgerEnabled ? "merchant-owned" : false,
+      resourceDelivery: config.publicResourceEnabled
+        ? "facilitator-backed"
+        : config.deliveryLedgerEnabled
+          ? "merchant-owned"
+          : false,
       sponsorship: false,
       oauth: config.oauthEnabled,
       partnerRegistration: config.partnerRegistrationEnabled,
       mcp: config.mcpEnabled,
+      publicPaidResource: config.publicResourceEnabled,
     },
   } as const;
 }
@@ -235,6 +257,48 @@ export function createOpenApiDocument(config: AppConfig) {
     },
     "/openapi.json": { get: { operationId: "getOpenApi", responses: jsonResponse } },
   };
+
+  if (config.publicResourceEnabled) {
+    paths["/v1"] = {
+      get: {
+        operationId: "getPaidNayoriCapabilityReport",
+        summary: "Purchase or retrieve the Nayori commerce capability report with x402 on Stacks",
+        parameters: [
+          {
+            name: "settlement",
+            in: "query",
+            required: false,
+            schema: { type: "string", pattern: "^ns_[0-9a-f]{32}$" },
+            description: "Poll a previously submitted asynchronous Stacks settlement.",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Confirmed settlement and idempotently delivered capability report",
+            headers: {
+              "PAYMENT-RESPONSE": { description: "Base64 x402 v2 settlement response" },
+            },
+          },
+          "202": {
+            description: "The signed Stacks transaction is awaiting canonical confirmation",
+            headers: {
+              Location: { description: "Polling URL for this settlement" },
+              "Retry-After": { description: "Suggested polling delay in seconds" },
+              "X-NAYORI-SETTLEMENT-ID": { description: "Nayori settlement identifier" },
+            },
+          },
+          "402": {
+            description: "A wallet-approved x402 payment is required",
+            headers: {
+              "PAYMENT-REQUIRED": { description: "Base64 x402 v2 payment requirements" },
+            },
+          },
+          "409": { description: "The settlement failed or is not deliverable" },
+          "503": { description: "The isolated facilitator is unavailable" },
+        },
+      },
+    };
+  }
 
   if (config.oauthEnabled) {
     paths["/.well-known/oauth-authorization-server"] = {
@@ -401,17 +465,19 @@ export function createOpenApiDocument(config: AppConfig) {
     info: {
       title: "Nayori x402 Facilitator API",
       version: SERVICE_VERSION,
-      description: config.deliveryLedgerEnabled
-        ? "Issues quotes, settles on testnet, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger."
-        : config.reconciliationEnabled
-          ? "Issues quotes, settles on testnet and reconciles canonical confirmations into signed receipts."
-          : config.settlementEnabled
-            ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
-        : config.paymentVerificationEnabled
-          ? "Issues authenticated quotes and verifies payments without broadcasting or delivery."
-          : config.quoteIssuanceEnabled
-            ? "Issues authenticated request-bound quotes. Payment verification and settlement are disabled."
-            : "Foundation release. Quote, verification and settlement operations are disabled.",
+      description: config.publicResourceEnabled
+        ? "Exposes a public same-origin x402 resource backed by an isolated Stacks facilitator."
+        : config.deliveryLedgerEnabled
+          ? "Issues quotes, settles on testnet, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger."
+          : config.reconciliationEnabled
+            ? "Issues quotes, settles on testnet and reconciles canonical confirmations into signed receipts."
+            : config.settlementEnabled
+              ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
+              : config.paymentVerificationEnabled
+                ? "Issues authenticated quotes and verifies payments without broadcasting or delivery."
+                : config.quoteIssuanceEnabled
+                  ? "Issues authenticated request-bound quotes. Payment verification and settlement are disabled."
+                  : "Foundation release. Quote, verification and settlement operations are disabled.",
     },
     servers: [{ url: config.serviceOrigin }],
     paths,
@@ -455,6 +521,9 @@ OAuth enabled: ${config.oauthEnabled}
 OAuth mode: ${config.oauthEnabled ? config.oauthMode : "disabled"}
 Partner registration enabled: ${config.partnerRegistrationEnabled}
 MCP enabled: ${config.mcpEnabled}
+Public paid resource enabled: ${config.publicResourceEnabled}
+Public paid resource: ${config.publicResourceEnabled ? config.publicResourceUrl : "unavailable"}
+Facilitator: ${config.publicResourceEnabled ? config.facilitatorOrigin : config.serviceOrigin}
 Sponsorship enabled: false
 
 ${
@@ -473,6 +542,12 @@ ${
 Never treat quote issuance, verify-only or a broadcast response as confirmed payment. Only a
 signed receipt emitted after canonical confirmation depth proves settlement. The merchant owns
 resource delivery and must deduplicate it by delivery ID.
+
+${
+  config.publicResourceEnabled
+    ? `The public resource at ${config.publicResourceUrl} returns a standard PAYMENT-REQUIRED challenge, accepts PAYMENT-SIGNATURE plus the issued X-NAYORI-SIGNED-QUOTE extension, and returns 202 until Stacks confirmation. It is delivered only with PAYMENT-RESPONSE after the isolated facilitator confirms settlement.`
+    : "No public paid resource is enabled on this runtime."
+}
 
 SDK: https://github.com/PerkOS-xyz/PerkOS-Nayori-Agent-SDK
 Product: https://nayori.ai
