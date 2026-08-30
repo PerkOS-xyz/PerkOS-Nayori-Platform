@@ -579,7 +579,13 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
         return context.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
       }
       try {
-        return context.json(await mcpService.handle(context.req.header("authorization"), input));
+        return context.json(
+          await mcpService.handle(
+            context.req.header("authorization"),
+            input,
+            context.get("requestId"),
+          ),
+        );
       } catch (error) {
         if (!(error instanceof McpAuthenticationError)) throw error;
         const scope = error.code === "insufficient_scope" ? ', error="insufficient_scope", scope="mcp:invoke"' : "";

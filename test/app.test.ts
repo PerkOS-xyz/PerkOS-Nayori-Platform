@@ -75,7 +75,7 @@ describe("Nayori foundation API", () => {
     expect(await response.json()).toEqual({
       status: "ok",
       service: "nayori-x402-facilitator",
-      version: "0.7.0",
+      version: "0.7.1",
       release: "abc1234",
     });
     expect(database.pingCount).toBe(0);

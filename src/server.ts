@@ -49,32 +49,32 @@ const settlementService = config.paymentVerificationEnabled
       ...(oauthAuthenticator ? { authenticator: oauthAuthenticator } : {}),
     })
   : undefined;
-const mcpService = config.mcpEnabled
-  ? createMcpService({
-      config,
-      authenticator: oauthAuthenticator!,
-      quoteService,
-      settlementService,
+const facilitatorClient = config.publicResourceEnabled || config.mppResourceEnabled
+  ? createFacilitatorClient({
+      origin: config.facilitatorOrigin,
+      merchantApiKey: config.facilitatorMerchantApiKey!,
+      timeoutMs: config.facilitatorRequestTimeoutMs,
     })
   : undefined;
 const paidResourceService = config.publicResourceEnabled
   ? createPaidResourceService({
       config,
-      facilitator: createFacilitatorClient({
-        origin: config.facilitatorOrigin,
-        merchantApiKey: config.facilitatorMerchantApiKey!,
-        timeoutMs: config.facilitatorRequestTimeoutMs,
-      }),
+      facilitator: facilitatorClient!,
     })
   : undefined;
 const mppResourceService = config.mppResourceEnabled
   ? createMppResourceService({
       config,
-      facilitator: createFacilitatorClient({
-        origin: config.facilitatorOrigin,
-        merchantApiKey: config.facilitatorMerchantApiKey!,
-        timeoutMs: config.facilitatorRequestTimeoutMs,
-      }),
+      facilitator: facilitatorClient!,
+    })
+  : undefined;
+const mcpService = config.mcpEnabled
+  ? createMcpService({
+      config,
+      authenticator: oauthAuthenticator!,
+      quoteService,
+      publicQuoteService: paidResourceService,
+      settlementService,
     })
   : undefined;
 const app = createApp({

@@ -99,6 +99,12 @@ validates EdDSA, issuer, audience, lifetime and scopes, then requires its own me
 active. OAuth authorizes API access; it cannot sign a payment. Every STX, sBTC or USDCx transfer
 remains a separate wallet-approved transaction.
 
+When MCP and the public x402 resource are both enabled, `nayori_request_quote` may delegate only
+the configured `PUBLIC_RESOURCE_ROUTE_ID` with the exact configured `GET PUBLIC_RESOURCE_URL` to
+the resource server's existing facilitator client. The call requires both `mcp:invoke` and
+`quotes:create`. Any route, method, URL or body mismatch fails before the isolated facilitator is
+contacted. The facilitator merchant credential never enters OAuth, the MCP payload or the agent.
+
 ## Requirements
 
 - Node.js 22+
