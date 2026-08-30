@@ -117,7 +117,12 @@ function fakeFacilitator() {
   let currentStatus: PublicSettlement["status"] = "pending";
   let completedDigest: string | null = null;
   const client: FacilitatorClient = {
-    async issueQuote() {
+    async issueQuote(input, observedRequestId) {
+      expect(input).toEqual({
+        routeId: "nayori-capability-report",
+        request: { method: "GET", url: "https://nayori.ai/api/v1" },
+      });
+      expect(observedRequestId).toMatch(/^[A-Za-z0-9._:-]{1,64}$/);
       return issuedQuote;
     },
     async settle() {
@@ -160,6 +165,7 @@ describe("public x402 resource", () => {
     const facilitator = fakeFacilitator();
     const service = createPaidResourceService({ config, facilitator: facilitator.client });
 
+    await expect(service.issueQuote(requestId)).resolves.toEqual(issuedQuote);
     const challenge = await service.createChallenge(requestId);
     const decoded = decodePaymentRequiredHeader(challenge.encodedPaymentRequired);
     expect(decoded).toMatchObject({

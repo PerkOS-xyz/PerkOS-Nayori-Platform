@@ -15,6 +15,7 @@ import {
   type FacilitatorClient,
 } from "./facilitator-client.js";
 import type { PublicSettlement } from "./settlement.js";
+import type { IssuedQuoteResponse } from "./quotes.js";
 
 export const PAYMENT_REQUIRED_HEADER = "PAYMENT-REQUIRED";
 export const PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE";
@@ -55,6 +56,7 @@ export type PaidResourceDelivered = {
 export type PaidResourceResult = PaidResourcePending | PaidResourceDelivered;
 
 export type PaidResourceService = {
+  issueQuote(requestId: string): Promise<IssuedQuoteResponse>;
   createChallenge(requestId: string): Promise<PaidResourceChallenge>;
   submit(
     encodedPaymentSignature: string,
@@ -139,6 +141,21 @@ export function createPaidResourceService(options: {
 }): PaidResourceService {
   const { config, facilitator } = options;
 
+  async function issueQuote(requestId: string): Promise<IssuedQuoteResponse> {
+    try {
+      return await facilitator.issueQuote(
+        {
+          routeId: config.publicResourceRouteId,
+          request: { method: "GET", url: config.publicResourceUrl },
+        },
+        requestId,
+      );
+    } catch (error) {
+      if (error instanceof FacilitatorClientError) throw mapFacilitatorError(error);
+      throw error;
+    }
+  }
+
   async function deliver(settlement: PublicSettlement, requestId: string): Promise<PaidResourceDelivered> {
     if (settlement.status !== "confirmed" || !settlement.receipt) {
       throw new PaidResourceError(
@@ -191,20 +208,9 @@ export function createPaidResourceService(options: {
   }
 
   return {
+    issueQuote,
     async createChallenge(requestId) {
-      let issued;
-      try {
-        issued = await facilitator.issueQuote(
-          {
-            routeId: config.publicResourceRouteId,
-            request: { method: "GET", url: config.publicResourceUrl },
-          },
-          requestId,
-        );
-      } catch (error) {
-        if (error instanceof FacilitatorClientError) throw mapFacilitatorError(error);
-        throw error;
-      }
+      const issued = await issueQuote(requestId);
       const paymentRequired: PaymentRequired = {
         x402Version: 2,
         error: "Payment is required for the Nayori commerce capability report.",

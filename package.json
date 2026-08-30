@@ -1,6 +1,6 @@
 {
   "name": "@perkos/nayori-platform",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Private API and reconciliation platform for Nayori agent-commerce payments on Stacks.",
   "type": "module",

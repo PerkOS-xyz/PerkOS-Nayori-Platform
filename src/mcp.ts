@@ -1,8 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 import { z } from "zod";
 
 import { MerchantAuthenticationError, type MerchantAuthenticator } from "./auth.js";
 import type { AppConfig } from "./config.js";
-import { createSupportedDocument } from "./documents.js";
+import { createSupportedDocument, SERVICE_VERSION } from "./documents.js";
+import { quoteRequestSchema } from "./merchant.js";
+import type { PaidResourceService } from "./paid-resource.js";
 import type { QuoteService } from "./quotes.js";
 import type { SettlementService } from "./settlement.js";
 
@@ -77,18 +81,23 @@ function failure(id: string | number | null, code: number, message: string): Mcp
 }
 
 export type McpService = {
-  handle(authorization: string | undefined, input: unknown): Promise<McpResponse>;
+  handle(
+    authorization: string | undefined,
+    input: unknown,
+    requestId?: string,
+  ): Promise<McpResponse>;
 };
 
 export function createMcpService(options: {
   readonly config: AppConfig;
   readonly authenticator: MerchantAuthenticator;
   readonly quoteService?: QuoteService;
+  readonly publicQuoteService?: Pick<PaidResourceService, "issueQuote">;
   readonly settlementService?: SettlementService;
 }): McpService {
-  const { config, authenticator, quoteService, settlementService } = options;
+  const { config, authenticator, quoteService, publicQuoteService, settlementService } = options;
   return {
-    async handle(authorization, input) {
+    async handle(authorization, input, requestId = randomUUID()) {
       try {
         await authenticator.authenticate(authorization, "mcp:invoke");
       } catch (error) {
@@ -104,7 +113,7 @@ export function createMcpService(options: {
         return success(id, {
           protocolVersion: "2025-11-25",
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "nayori-x402", version: "0.5.0" },
+          serverInfo: { name: "nayori-x402", version: SERVICE_VERSION },
         });
       }
       if (method === "ping") return success(id, {});
@@ -118,8 +127,30 @@ export function createMcpService(options: {
         if (call.data.name === "nayori_supported") {
           value = createSupportedDocument(config);
         } else if (call.data.name === "nayori_request_quote") {
-          if (!quoteService) throw new Error("Quote issuance is unavailable.");
-          value = (await quoteService.issue(authorization, call.data.arguments)).response;
+          const parsedQuote = quoteRequestSchema.safeParse(call.data.arguments);
+          const isPublicRoute = parsedQuote.success &&
+            parsedQuote.data.routeId === config.publicResourceRouteId;
+          if (isPublicRoute && publicQuoteService) {
+            try {
+              await authenticator.authenticate(authorization, "quotes:create");
+            } catch (error) {
+              if (error instanceof MerchantAuthenticationError) {
+                throw new Error("A bearer token with quotes:create is required.", { cause: error });
+              }
+              throw error;
+            }
+            if (
+              parsedQuote.data.request.method !== "GET" ||
+              parsedQuote.data.request.url !== config.publicResourceUrl ||
+              parsedQuote.data.request.body !== undefined
+            ) {
+              throw new Error("The protected request does not match the public resource route.");
+            }
+            value = await publicQuoteService.issueQuote(requestId);
+          } else {
+            if (!quoteService) throw new Error("Quote issuance is unavailable.");
+            value = (await quoteService.issue(authorization, call.data.arguments)).response;
+          }
         } else {
           if (!settlementService) throw new Error("Settlement reads are unavailable.");
           const settlementId = call.data.arguments.settlementId;

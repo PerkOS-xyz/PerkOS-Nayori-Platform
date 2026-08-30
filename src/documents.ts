@@ -4,7 +4,7 @@ import { oauthScopes } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.7.0";
+export const SERVICE_VERSION = "0.7.1";
 
 function oauthIssuer(config: AppConfig): string {
   return config.oauthMode === "external" ? config.oauthIssuerOrigin : config.serviceOrigin;
