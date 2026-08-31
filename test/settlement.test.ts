@@ -502,8 +502,8 @@ describe("payment verification and testnet settlement", () => {
       settlement: { settlementId: first.settlement.settlementId, status: "broadcast" },
     });
     expect([...test.store.settlements.values()][0]).toMatchObject({
-      verifierVersion: "@perkos/agent-sdk@0.5.0",
-      verifierChecksum: "8d4d34e400ea2e12720ffbd020e0bb66f30819af13fdda118f01858e8ef9baf0",
+      verifierVersion: "@perkos/agent-sdk@0.5.1",
+      verifierChecksum: "044e26c1bb15f58ffe032a3df9b4efe94662eecec97c63f39b5dd6eb852d73b3",
     });
     expect(test.broadcast).toHaveBeenCalledTimes(1);
   });
