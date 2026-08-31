@@ -37,9 +37,9 @@ import type { MerchantRecord } from "./merchant.js";
 import type { QuoteSigner, VerifiedQuoteToken } from "./quote-signing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 
-const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.5.0";
+const SDK_VERIFIER_VERSION = "@perkos/agent-sdk@0.5.1";
 const SDK_NPM_INTEGRITY =
-  "sha512-TAVNTpYdlk1w9nsCWfj7cyeS+tk6Jg+DaTGNfj/wQNBOTihRtQZx7TpGdAvLglAW7r2Ed6kOnXXAVr/srw5/0Q==";
+  "sha512-NZtlFbECptuu9lF7KQ/tjg9w2BXCV3XofHEJFGJ5AbScBKdLnSI+FXsF7eV6ksjk40o3B9+0sBc8hIbERdNF7g==";
 const SDK_VERIFIER_CHECKSUM = createHash("sha256")
   .update(SDK_NPM_INTEGRITY, "utf8")
   .digest("hex");

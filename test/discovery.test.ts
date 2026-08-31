@@ -109,7 +109,7 @@ describe("OAuth and MCP discovery routes", () => {
     });
     expect(authGuide.headers.get("content-type")).toContain("text/markdown");
     expect(await card.json()).toMatchObject({
-      serverInfo: { name: "nayori-x402", version: "0.7.1" },
+      serverInfo: { name: "nayori-x402", version: "0.7.2" },
       server: { url: "https://api.nayori.ai/mcp" },
     });
     expect(await mcp.json()).toMatchObject({ result: { ok: true } });
