@@ -295,6 +295,13 @@ plus a raw-transaction digest before broadcasting.
 - MCP Server Cards remain an experimental ecosystem extension; the card truthfully advertises
   only the implemented Streamable HTTP tools.
 
+## QA promotion
+
+`main` is the canonical integration branch. The `Promote exact main commit to QA` workflow accepts
+only a full commit SHA already contained in `main`, requires a fast-forward from the current `qa`
+branch, reruns migrations, tests, build and dependency audit, and then pushes that exact SHA to
+`qa` without force. QA deployments must identify both this commit and the resulting image digest.
+
 ## Planned PR sequence
 
 1. Foundation: truthful discovery, PostgreSQL, migration runner, Docker and CI — complete.

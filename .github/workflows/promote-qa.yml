@@ -1,0 +1,91 @@
+name: Promote exact main commit to QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact 40-character commit SHA already merged into main
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qa-promotion
+  cancel-in-progress: false
+
+jobs:
+  verify-and-promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: nayori_test
+          POSTGRES_PASSWORD: nayori_test
+          POSTGRES_USER: nayori_test
+        options: >-
+          --health-cmd "pg_isready -U nayori_test -d nayori_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgresql://nayori_test:nayori_test@127.0.0.1:5432/nayori_test
+      DATABASE_INTEGRATION: "true"
+      DELIVERY_LEDGER_ENABLED: "false"
+      PAYMENT_VERIFICATION_ENABLED: "false"
+      QUOTE_ISSUANCE_ENABLED: "false"
+      SERVICE_ORIGIN: http://localhost:8080
+      RECONCILIATION_ENABLED: "false"
+      SETTLEMENT_ENABLED: "false"
+      SPONSORSHIP_ENABLED: "false"
+      STACKS_NETWORK: testnet
+    steps:
+      - name: Check out main with complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate requested promotion
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: |
+          printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          git fetch origin main qa
+          git cat-file -e "$RELEASE_SHA^{commit}"
+          git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+          git merge-base --is-ancestor origin/qa "$RELEASE_SHA"
+
+      - name: Check out the exact release commit
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: git checkout --detach "$RELEASE_SHA"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release gates
+        run: |
+          npm run lint
+          npm run typecheck
+          npm run db:migrate
+          npm run db:migrate
+          npm test
+          npm run build
+          npm audit --audit-level=high
+
+      - name: Promote the verified SHA without force
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: git push origin "$RELEASE_SHA:refs/heads/qa"
