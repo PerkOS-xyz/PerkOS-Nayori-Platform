@@ -18,7 +18,9 @@ wallet-approved Stacks transactions; the MPP route is USDCx-only. A separately c
 All write capabilities remain disabled by default. `broadcast` and `pending` are unconfirmed and
 cannot create a receipt or delivery record. Once confirmed, the merchant resource server uses a
 stable delivery ID to deduplicate resource delivery; Nayori does not proxy arbitrary merchant
-URLs. Mainnet and sponsorship remain disabled. M1 contracts and deployments are unchanged.
+URLs. Settlement remains disabled by default; production mainnet activation requires the exact
+`CONFIRM_MAINNET_SETTLEMENT=yes` acknowledgement plus a matching mainnet Hiro endpoint.
+Sponsorship remains disabled, and contract deployments are unchanged.
 
 ## Architecture
 
@@ -211,7 +213,7 @@ documented in the design, and `DATABASE_URL`, then run:
 npm run merchant:provision
 ```
 
-The command validates every route through SDK 0.5.1, writes only a SHA-256 credential digest and
+The command validates every route through SDK 0.7.1, writes only a SHA-256 credential digest and
 prints the new `ny_mk_` API key once. Store that key in the merchant secret manager. Named route
 configuration fixes method, path prefix, audience, network, asset, amount, recipient and TTL on
 the server, so the quote request cannot redirect funds or change price.
