@@ -6,6 +6,7 @@ import { secureHeaders } from "hono/secure-headers";
 
 import type { AppConfig } from "./config.js";
 import type { DatabaseHealth } from "./database.js";
+import type { PublicPaymentService } from "./public-payments.js";
 import {
   createAgentDocument,
   createAuthMarkdown,
@@ -56,6 +57,7 @@ export type CreateAppOptions = {
   readonly mcpService?: McpService;
   readonly paidResourceService?: PaidResourceService;
   readonly mppResourceService?: MppResourceService;
+  readonly publicPaymentService?: PublicPaymentService;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -84,6 +86,7 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
     mcpService,
     paidResourceService,
     mppResourceService,
+    publicPaymentService,
   } = options;
   if (config.quoteIssuanceEnabled && !quoteService) {
     throw new Error("Quote issuance is enabled without a quote service.");
@@ -104,6 +107,9 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
     throw new Error("The public MPP resource is enabled without an MPP resource service.");
   }
   const app = new Hono<{ Variables: AppVariables }>();
+  if (config.publicPaymentEvidenceEnabled && !publicPaymentService) {
+    throw new Error("Public payment evidence enabled without a service.");
+  }
 
   app.use("*", async (context, next) => {
     const supplied = context.req.header("x-request-id");
@@ -232,6 +238,17 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
   });
 
   app.get("/supported", (context) => context.json(createSupportedDocument(config)));
+  if (config.publicPaymentEvidenceEnabled && publicPaymentService) {
+    app.get("/v1/public/payments", async (context) => {
+      context.header("access-control-allow-origin", "*");
+      if (new URL(context.req.url).search) return context.json({ error: { code: "invalid_query" } }, 400);
+      try { return context.json(await publicPaymentService.snapshot()); }
+      catch {
+        return context.json({ schemaVersion: 1, dataStatus: "unavailable",
+          error: { code: "public_payment_source_unavailable" } }, 503);
+      }
+    });
+  }
   app.get("/x402.json", (context) => context.json(createSupportedDocument(config)));
   app.get("/.well-known/agent.json", (context) => context.json(createAgentDocument(config)));
   app.get("/openapi.json", (context) => context.json(createOpenApiDocument(config)));

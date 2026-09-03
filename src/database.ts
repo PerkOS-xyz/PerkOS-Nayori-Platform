@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 
 import type { AppConfig } from "./config.js";
+import { PUBLIC_PAYMENT_LIMIT, type PublicPaymentRow } from "./public-payments.js";
 import {
   parseMerchantRecord,
   type MerchantProvisioning,
@@ -292,6 +293,24 @@ export class PostgresDatabase
 
   async ping(): Promise<void> {
     await this.#pool.query("SELECT 1");
+  }
+
+  async listPublicPayments(network: string, urls: readonly string[]): Promise<PublicPaymentRow[]> {
+    // Public resources only. Never select signed tokens, raw transactions or merchant credentials.
+    const result = await this.#pool.query<PublicPaymentRow>(
+      `SELECT s.txid, s.network, q.canonical_url AS "canonicalUrl", q.asset_id AS "assetId",
+        q.amount_atomic::text AS "amountAtomic", s.payer, q.pay_to AS "payTo",
+        s.confirmed_block_height::text AS "blockHeight", s.confirmed_block_hash AS "blockHash",
+        s.confirmed_at AS "confirmedAt", d.status AS "deliveryStatus"
+       FROM settlements s JOIN quotes q USING (quote_id)
+       JOIN settlement_receipts r USING (settlement_id)
+       LEFT JOIN deliveries d USING (settlement_id)
+       WHERE q.merchant_id = 'nayori-public-resource' AND s.status = 'confirmed'
+         AND s.network = $1 AND q.network = $1 AND q.canonical_url = ANY($2::text[])
+       ORDER BY s.confirmed_at DESC, s.txid DESC LIMIT $3`,
+      [network, [...urls], PUBLIC_PAYMENT_LIMIT + 1],
+    );
+    return result.rows;
   }
 
   async findActiveMerchantByApiKeyHash(apiKeyHash: string): Promise<MerchantRecord | null> {
