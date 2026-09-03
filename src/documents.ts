@@ -4,7 +4,7 @@ import { oauthScopes } from "./auth.js";
 import type { AppConfig } from "./config.js";
 
 export const SERVICE_NAME = "nayori-x402-facilitator";
-export const SERVICE_VERSION = "0.7.2";
+export const SERVICE_VERSION = "0.7.3";
 
 function oauthIssuer(config: AppConfig): string {
   return config.oauthMode === "external" ? config.oauthIssuerOrigin : config.serviceOrigin;
@@ -22,9 +22,9 @@ function serviceStatus(config: AppConfig) {
   if (config.publicResourceEnabled && config.mppResourceEnabled) return "public-multi-protocol-resource";
   if (config.mppResourceEnabled) return "public-mpp-resource";
   if (config.publicResourceEnabled) return "public-x402-resource";
-  if (config.deliveryLedgerEnabled) return "testnet-confirmation-delivery-ledger";
-  if (config.reconciliationEnabled) return "testnet-confirmation-ready";
-  if (config.settlementEnabled) return "testnet-settlement-broadcast";
+  if (config.deliveryLedgerEnabled) return `${config.stacksNetwork}-confirmation-delivery-ledger`;
+  if (config.reconciliationEnabled) return `${config.stacksNetwork}-confirmation-ready`;
+  if (config.settlementEnabled) return `${config.stacksNetwork}-settlement-broadcast`;
   if (config.paymentVerificationEnabled) return "verification-ready";
   if (config.quoteIssuanceEnabled) return "quote-ready";
   return "foundation";
@@ -107,7 +107,7 @@ export function createSupportedDocument(config: AppConfig) {
         : []),
     ],
     roadmap: {
-      testNetwork: config.stacksNetwork,
+      activeNetwork: config.stacksNetwork,
       mechanism: "stacks-signed-tx-v1",
       assets: ["STX", "sBTC", "USDCx"],
     },
@@ -128,7 +128,7 @@ export function createAgentDocument(config: AppConfig) {
       writes: config.deliveryLedgerEnabled
         ? "merchant bearer authentication for quote, settlement status and delivery-ledger operations"
         : config.settlementEnabled
-          ? "merchant bearer authentication for quote, verification and testnet broadcast operations"
+          ? `merchant bearer authentication for quote, verification and ${config.stacksNetwork} broadcast operations`
         : config.paymentVerificationEnabled
           ? "merchant bearer authentication for quote and verify-only operations"
           : config.quoteIssuanceEnabled
@@ -597,11 +597,11 @@ export function createOpenApiDocument(config: AppConfig) {
         : config.publicResourceEnabled
           ? "Exposes a public same-origin x402 resource backed by an isolated Stacks facilitator."
         : config.deliveryLedgerEnabled
-          ? "Issues quotes, settles on testnet, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger."
+          ? `Issues quotes, settles on ${config.stacksNetwork}, reconciles canonical confirmations, signs receipts and exposes a merchant-owned idempotent delivery ledger.`
           : config.reconciliationEnabled
-            ? "Issues quotes, settles on testnet and reconciles canonical confirmations into signed receipts."
+            ? `Issues quotes, settles on ${config.stacksNetwork} and reconciles canonical confirmations into signed receipts.`
             : config.settlementEnabled
-              ? "Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on testnet. Confirmation and delivery are unavailable."
+              ? `Issues quotes, verifies standard direct payments and broadcasts each reserved transaction once on ${config.stacksNetwork}. Confirmation and delivery are unavailable.`
               : config.paymentVerificationEnabled
                 ? "Issues authenticated quotes and verifies payments without broadcasting or delivery."
                 : config.quoteIssuanceEnabled
@@ -668,11 +668,11 @@ Sponsorship enabled: false
 
 ${
   config.deliveryLedgerEnabled
-    ? "Authenticated merchants may settle on testnet, receive a signed receipt after canonical confirmation depth and use a stable delivery ID. The merchant resource server performs and deduplicates resource delivery; Nayori does not proxy arbitrary URLs."
+    ? `Authenticated merchants may settle on ${config.stacksNetwork}, receive a signed receipt after canonical confirmation depth and use a stable delivery ID. The merchant resource server performs and deduplicates resource delivery; Nayori does not proxy arbitrary URLs.`
     : config.reconciliationEnabled
-      ? "Authenticated merchants may settle on testnet and receive a signed receipt only after canonical confirmation depth. Resource delivery and sponsorship are unavailable."
+      ? `Authenticated merchants may settle on ${config.stacksNetwork} and receive a signed receipt only after canonical confirmation depth. Resource delivery and sponsorship are unavailable.`
       : config.settlementEnabled
-        ? "Authenticated merchants may issue quotes, verify standard direct payments and request one testnet broadcast. Broadcast and pending states are not confirmation. Reconciliation, sponsorship and resource delivery are unavailable."
+        ? `Authenticated merchants may issue quotes, verify standard direct payments and request one ${config.stacksNetwork} broadcast. Broadcast and pending states are not confirmation. Reconciliation, sponsorship and resource delivery are unavailable.`
     : config.paymentVerificationEnabled
       ? "Authenticated merchants may issue quotes and verify standard direct payments. Verification does not broadcast, confirm, settle or deliver a resource."
       : config.quoteIssuanceEnabled

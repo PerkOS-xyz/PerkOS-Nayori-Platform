@@ -125,7 +125,7 @@ describe("authenticated MCP endpoint", () => {
     });
 
     expect(initialized).toMatchObject({
-      result: { serverInfo: { name: "nayori-x402", version: "0.7.2" } },
+      result: { serverInfo: { name: "nayori-x402", version: "0.7.3" } },
     });
     expect(listed).toMatchObject({
       result: {
