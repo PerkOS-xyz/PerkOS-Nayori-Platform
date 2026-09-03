@@ -86,6 +86,7 @@ const environmentSchema = z
     PAYMENT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(10_000).default(60),
     PAYMENT_VERIFICATION_ENABLED: booleanFlag,
     SETTLEMENT_ENABLED: booleanFlag,
+    CONFIRM_MAINNET_SETTLEMENT: z.literal("yes").optional(),
     RECONCILIATION_ENABLED: booleanFlag,
     SETTLEMENT_MIN_CONFIRMATIONS: z.coerce.number().int().min(1).max(100).default(1),
     RECONCILIATION_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(25),
@@ -148,18 +149,39 @@ const environmentSchema = z
         message: "Settlement requires payment verification.",
       });
     }
-    if (value.SETTLEMENT_ENABLED && value.STACKS_NETWORK !== "testnet") {
+    if (
+      value.SETTLEMENT_ENABLED &&
+      value.STACKS_NETWORK === "mainnet" &&
+      value.CONFIRM_MAINNET_SETTLEMENT !== "yes"
+    ) {
       context.addIssue({
         code: "custom",
-        path: ["STACKS_NETWORK"],
-        message: "Settlement is restricted to Stacks testnet in this release.",
+        path: ["CONFIRM_MAINNET_SETTLEMENT"],
+        message: "Mainnet settlement requires CONFIRM_MAINNET_SETTLEMENT=yes.",
       });
+    }
+    if (value.SETTLEMENT_ENABLED) {
+      const stacksApiHostname = new URL(value.STACKS_API_URL).hostname.toLowerCase();
+      if (value.STACKS_NETWORK === "mainnet" && stacksApiHostname === "api.testnet.hiro.so") {
+        context.addIssue({
+          code: "custom",
+          path: ["STACKS_API_URL"],
+          message: "Mainnet settlement cannot use the canonical Hiro testnet API.",
+        });
+      }
+      if (value.STACKS_NETWORK === "testnet" && stacksApiHostname === "api.hiro.so") {
+        context.addIssue({
+          code: "custom",
+          path: ["STACKS_API_URL"],
+          message: "Testnet settlement cannot use the canonical Hiro mainnet API.",
+        });
+      }
     }
     if (value.RECONCILIATION_ENABLED && !value.SETTLEMENT_ENABLED) {
       context.addIssue({
         code: "custom",
         path: ["RECONCILIATION_ENABLED"],
-        message: "Reconciliation requires testnet settlement.",
+        message: "Reconciliation requires settlement.",
       });
     }
     if (value.DELIVERY_LEDGER_ENABLED && !value.RECONCILIATION_ENABLED) {
@@ -308,6 +330,7 @@ export type AppConfig = {
   readonly paymentRateLimitPerMinute: number;
   readonly paymentVerificationEnabled: boolean;
   readonly settlementEnabled: boolean;
+  readonly mainnetSettlementConfirmed: boolean;
   readonly reconciliationEnabled: boolean;
   readonly settlementMinConfirmations: number;
   readonly reconciliationBatchSize: number;
@@ -365,6 +388,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     paymentRateLimitPerMinute: value.PAYMENT_RATE_LIMIT_PER_MINUTE,
     paymentVerificationEnabled: value.PAYMENT_VERIFICATION_ENABLED,
     settlementEnabled: value.SETTLEMENT_ENABLED,
+    mainnetSettlementConfirmed: value.CONFIRM_MAINNET_SETTLEMENT === "yes",
     reconciliationEnabled: value.RECONCILIATION_ENABLED,
     settlementMinConfirmations: value.SETTLEMENT_MIN_CONFIRMATIONS,
     reconciliationBatchSize: value.RECONCILIATION_BATCH_SIZE,

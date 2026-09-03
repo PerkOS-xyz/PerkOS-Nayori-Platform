@@ -5,10 +5,10 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
-This repository is at the **multi-protocol paid-resource, external-OAuth and testnet settlement boundary**. It
+This repository implements the **multi-protocol paid-resource, external-OAuth and network-pinned settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
 merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
-verifier, durable reservation, one Stacks testnet
+verifier, durable reservation, one Stacks
 broadcast attempt, leased reconciliation, canonical confirmation-depth checks and signed
 settlement receipts. A resource-server runtime can expose x402 v2 at `api.nayori.ai/v1` and MPP
 PaymentAuth (`method=usdc`, `intent=charge`, `type=stacks`) at `api.nayori.ai/mpp/v1`. Both use
@@ -32,7 +32,7 @@ Agent / Leather ---> nayori.ai/api/v1 or /api/mpp/v1 (same-origin proxy)
                               v
                   facilitator.nayori.ai (quote / verify / settle)
                               |                 |
-                         PostgreSQL        Stacks/Hiro testnet
+                         PostgreSQL        Stacks/Hiro
                               |
                       reconciliation worker
 
@@ -70,9 +70,9 @@ client state and signing material belong to the separate private `PerkOS-Nayori-
 | `GET /mpp/v1` | Public MPP PaymentAuth USDCx challenge, submission, polling and confirmation-gated delivery |
 | `POST /v1/quotes` | Authenticated request-bound quote issuance when enabled |
 | `POST /v1/x402/verify` | Authenticated verify-only check; never broadcasts |
-| `POST /v1/x402/settle` | Reserves and broadcasts once on testnet; returns unconfirmed state |
+| `POST /v1/x402/settle` | Reserves and broadcasts once on the configured network; returns unconfirmed state |
 | `POST /v1/mpp/verify` | Authenticated MPP credential verification; never broadcasts |
-| `POST /v1/mpp/settle` | Reserves and broadcasts one verified MPP USDCx transaction on testnet |
+| `POST /v1/mpp/settle` | Reserves and broadcasts one verified MPP USDCx transaction on the configured network |
 | `GET /v1/x402/settlements/:id` | Merchant-isolated status for a reserved settlement |
 | `POST /v1/x402/settlements/:id/delivery/claim` | Claims the stable delivery ID and signed receipt |
 | `POST /v1/x402/settlements/:id/delivery/complete` | Records an idempotent response digest |
@@ -154,14 +154,15 @@ See [`.env.example`](.env.example). Important fail-closed settings:
 - `QUOTE_PREVIOUS_PUBLIC_JWKS_JSON` retains public keys briefly during rotation; private members
   are rejected.
 - `PAYMENT_VERIFICATION_ENABLED=true` requires quote issuance.
-- `SETTLEMENT_ENABLED=true` requires verification and is rejected unless the configured Stacks
-  network is testnet.
-- `STACKS_API_URL` selects the testnet broadcast origin; production mode requires HTTPS.
+- `SETTLEMENT_ENABLED=true` requires verification. Mainnet additionally requires the exact
+  acknowledgement `CONFIRM_MAINNET_SETTLEMENT=yes`.
+- `STACKS_API_URL` selects the network API; canonical Hiro mainnet/testnet endpoints are rejected
+  when they contradict `STACKS_NETWORK`, and production mode requires HTTPS.
 - `STACKS_BROADCAST_TIMEOUT_MS` bounds the only broadcast attempt. Timeouts become `pending` and
   are never blindly retried.
 - `PAYMENT_RATE_LIMIT_PER_MINUTE` bounds authenticated verify, settle and status operations per
   merchant in each process; edge limits remain required for distributed abuse protection.
-- `RECONCILIATION_ENABLED=true` requires testnet settlement. The worker claims bounded batches
+- `RECONCILIATION_ENABLED=true` requires settlement. The worker claims bounded batches
   with PostgreSQL leases and never broadcasts.
 - `SETTLEMENT_MIN_CONFIRMATIONS` controls canonical depth before a signed receipt can exist.
 - `RECONCILIATION_BATCH_SIZE`, `RECONCILIATION_INTERVAL_MS` and `RECONCILIATION_LEASE_MS` bound
@@ -272,15 +273,15 @@ The schema and quote issuer support STX, sBTC and USDCx profiles without enablin
 
 Transaction parsing and economic verification belong in the public
 [`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins exact
-release `0.5.1`; it does not copy the SDK implementation.
+release `0.7.1`; it does not copy the SDK implementation.
 
-SDK 0.5.1 owns quote canonicalization, asset definitions, x402 requirements, MPP PaymentAuth
+SDK 0.7.1 owns quote canonicalization, asset definitions, x402 requirements, MPP PaymentAuth
 challenge/credential/receipt encoding, fingerprints, origin signature validation and the pure
 `stacks-signed-tx-v1` verifiers. Platform authenticates the merchant and signed quote first, then
 invokes the protocol-specific verifier, rejects sponsorship and persists only normalized evidence
 plus a raw-transaction digest before broadcasting.
 
-## Known testnet limitations
+## Known limitations
 
 - An ambiguous initial broadcast stays pending for observation; the platform intentionally does not
   rebroadcast transaction bytes and does not persist those bytes for a later automatic retry.
@@ -289,8 +290,8 @@ plus a raw-transaction digest before broadcasting.
   Operators must select a confirmation depth appropriate to the asset and environment.
 - The delivery ledger makes retries idempotent by delivery ID, but the merchant resource server must
   enforce that key around its own external side effects.
-- Mainnet and transaction sponsorship remain unavailable. The only automatic delivery is the
-  fixed Nayori capability report after confirmed testnet x402 or MPP settlement; arbitrary URL proxying remains
+- Transaction sponsorship remains unavailable. The only automatic delivery is the fixed Nayori
+  capability report after confirmed x402 or MPP settlement; arbitrary URL proxying remains
   unavailable.
 - MCP Server Cards remain an experimental ecosystem extension; the card truthfully advertises
   only the implemented Streamable HTTP tools.
@@ -299,22 +300,24 @@ plus a raw-transaction digest before broadcasting.
 
 `qa` is the protected integration branch and `main` is production. The exact QA commit is built on
 the Nayori VPS, migrations are applied idempotently to the isolated API and facilitator databases,
-and API/facilitator/worker health must pass before a release branch may target `main`. The workflow
-never enables mainnet settlement, sponsorship or a contract transaction.
+and API/facilitator/worker health must pass before a release branch may target `main`. QA stays on
+testnet; production mainnet settlement additionally requires the explicit runtime acknowledgement.
+The workflow never enables sponsorship or invokes an escrow contract.
 
 ## Planned PR sequence
 
 1. Foundation: truthful discovery, PostgreSQL, migration runner, Docker and CI — complete.
 2. Merchant authentication and signed, short-lived request quotes — complete.
-3. Pinned SDK verifier, durable reservation and testnet broadcast — complete.
+3. Pinned SDK verifier, durable reservation and network-pinned broadcast — complete.
 4. Reconciliation worker, confirmation receipts and delivery ledger — complete.
 5. SDK paying flow and initial Platform verifier pin — complete; external clean-room remains a
    separate adoption gate.
 6. Invite-only wallet-linked OAuth and scoped MCP partner pilot — complete.
 7. Separate authorization server and external JWT/JWKS resource verification — complete.
 8. Same-origin public x402 resource with an isolated facilitator and confirmation-gated delivery — complete.
-9. MPP PaymentAuth USDCx resource reusing the non-sponsored settlement pipeline — this release.
-10. Isolated sponsor relay only after the non-sponsored path passes review.
+9. MPP PaymentAuth USDCx resource reusing the non-sponsored settlement pipeline — complete.
+10. Explicit, fail-closed mainnet settlement with network/API binding — this release.
+11. Isolated sponsor relay only after the non-sponsored path passes review.
 
 See [`docs/plans/2026-08-26-facilitator-foundation-design.md`](docs/plans/2026-08-26-facilitator-foundation-design.md)
 [`docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md`](docs/plans/2026-08-26-merchant-auth-signed-quotes-design.md)
