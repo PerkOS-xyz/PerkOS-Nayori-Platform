@@ -54,6 +54,7 @@ describe("loadConfig", () => {
     expect(config.paymentVerificationEnabled).toBe(false);
     expect(config.paymentRateLimitPerMinute).toBe(60);
     expect(config.settlementEnabled).toBe(false);
+    expect(config.mainnetSettlementConfirmed).toBe(false);
     expect(config.reconciliationEnabled).toBe(false);
     expect(config.deliveryLedgerEnabled).toBe(false);
     expect(config.publicResourceEnabled).toBe(false);
@@ -183,7 +184,7 @@ describe("loadConfig", () => {
     ).toThrow(/requires quote issuance/i);
   });
 
-  it("requires verification and testnet before settlement", () => {
+  it("requires verification and an explicit acknowledgement before mainnet settlement", () => {
     const base = {
       ...REQUIRED_ENVIRONMENT,
       QUOTE_ISSUANCE_ENABLED: "true",
@@ -198,8 +199,47 @@ describe("loadConfig", () => {
         PAYMENT_VERIFICATION_ENABLED: "true",
         SETTLEMENT_ENABLED: "true",
         STACKS_NETWORK: "mainnet",
+        STACKS_API_URL: "https://api.hiro.so",
       }),
-    ).toThrow(/restricted to Stacks testnet/i);
+    ).toThrow(/CONFIRM_MAINNET_SETTLEMENT=yes/i);
+  });
+
+  it("accepts explicitly acknowledged mainnet settlement", () => {
+    const config = loadConfig({
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+      PAYMENT_VERIFICATION_ENABLED: "true",
+      SETTLEMENT_ENABLED: "true",
+      CONFIRM_MAINNET_SETTLEMENT: "yes",
+      STACKS_NETWORK: "mainnet",
+      STACKS_API_URL: "https://api.hiro.so/",
+    });
+
+    expect(config.stacksNetwork).toBe("mainnet");
+    expect(config.stacksApiUrl).toBe("https://api.hiro.so");
+    expect(config.mainnetSettlementConfirmed).toBe(true);
+  });
+
+  it("rejects canonical Hiro endpoints from the wrong Stacks network", () => {
+    const base = {
+      ...REQUIRED_ENVIRONMENT,
+      QUOTE_ISSUANCE_ENABLED: "true",
+      QUOTE_SIGNING_PRIVATE_JWK_JSON: '{"private":"deployment-secret"}',
+      PAYMENT_VERIFICATION_ENABLED: "true",
+      SETTLEMENT_ENABLED: "true",
+    };
+    expect(() => loadConfig({
+      ...base,
+      STACKS_NETWORK: "testnet",
+      STACKS_API_URL: "https://api.hiro.so",
+    })).toThrow(/testnet settlement cannot use.*mainnet/i);
+    expect(() => loadConfig({
+      ...base,
+      CONFIRM_MAINNET_SETTLEMENT: "yes",
+      STACKS_NETWORK: "mainnet",
+      STACKS_API_URL: "https://api.testnet.hiro.so",
+    })).toThrow(/mainnet settlement cannot use.*testnet/i);
   });
 
   it("accepts explicit testnet verification and settlement", () => {
@@ -221,7 +261,7 @@ describe("loadConfig", () => {
   it("requires settlement before reconciliation and reconciliation before delivery", () => {
     expect(() =>
       loadConfig({ ...REQUIRED_ENVIRONMENT, RECONCILIATION_ENABLED: "true" }),
-    ).toThrow(/requires testnet settlement/i);
+    ).toThrow(/requires settlement/i);
 
     const settlement = {
       ...REQUIRED_ENVIRONMENT,
