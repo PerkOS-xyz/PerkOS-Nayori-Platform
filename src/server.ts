@@ -12,6 +12,7 @@ import { createMppResourceService } from "./mpp-resource.js";
 import { createOAuthService, createOAuthSigner } from "./oauth.js";
 import { createPaidResourceService } from "./paid-resource.js";
 import { createQuoteSigner } from "./quote-signing.js";
+import { createPublicPaymentService } from "./public-payments.js";
 import { createQuoteService } from "./quotes.js";
 import { createSettlementService } from "./settlement.js";
 
@@ -87,6 +88,8 @@ const app = createApp({
   mcpService,
   paidResourceService,
   mppResourceService,
+  publicPaymentService: config.publicPaymentEvidenceEnabled
+    ? createPublicPaymentService({ config, store: database }) : undefined,
 });
 
 const server = serve(
