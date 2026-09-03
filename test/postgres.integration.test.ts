@@ -171,6 +171,10 @@ describe.skipIf(!runIntegration)("PostgreSQL merchant quote store", () => {
         new Date(),
       );
       expect(delivered).toMatchObject({ status: "delivered", responseDigest });
+      // Even a confirmed, delivered merchant payment is private unless it belongs to
+      // the deliberately public Nayori merchant. Supplying its URL cannot widen scope.
+      expect(await database.listPublicPayments("stacks:2147483648", ["https://merchant.example/v1/integration"])).toEqual([]);
+      expect(await database.listPublicPayments("stacks:1", ["https://merchant.example/v1/integration"])).toEqual([]);
       await expect(
         database.completeDelivery(
           "integration-settlement",

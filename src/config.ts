@@ -102,6 +102,7 @@ const environmentSchema = z
     PARTNER_REGISTRATION_ENABLED: booleanFlag,
     MCP_ENABLED: booleanFlag,
     PUBLIC_RESOURCE_ENABLED: booleanFlag,
+    PUBLIC_PAYMENT_EVIDENCE_ENABLED: booleanFlag,
     PUBLIC_RESOURCE_URL: publicResourceUrlSchema.default("https://nayori.ai/api/v1"),
     PUBLIC_RESOURCE_ROUTE_ID: z
       .string()
@@ -128,6 +129,13 @@ const environmentSchema = z
     SPONSORSHIP_ENABLED: disabledFeatureFlag,
   })
   .superRefine((value, context) => {
+    if (value.PUBLIC_PAYMENT_EVIDENCE_ENABLED && value.PUBLIC_RESOURCE_URL === value.MPP_RESOURCE_URL) {
+      context.addIssue({ code: "custom", path: ["MPP_RESOURCE_URL"], message: "Public payment evidence requires distinct x402 and MPP resource URLs." });
+    }
+    if (value.PUBLIC_PAYMENT_EVIDENCE_ENABLED && value.STACKS_API_URL !==
+      (value.STACKS_NETWORK === "mainnet" ? "https://api.hiro.so" : "https://api.testnet.hiro.so")) {
+      context.addIssue({ code: "custom", path: ["STACKS_API_URL"], message: "Public payment evidence requires the canonical Hiro endpoint for its network." });
+    }
     if (value.QUOTE_ISSUANCE_ENABLED && !value.QUOTE_SIGNING_PRIVATE_JWK_JSON) {
       context.addIssue({
         code: "custom",
@@ -346,6 +354,7 @@ export type AppConfig = {
   readonly partnerRegistrationEnabled: boolean;
   readonly mcpEnabled: boolean;
   readonly publicResourceEnabled: boolean;
+  readonly publicPaymentEvidenceEnabled: boolean;
   readonly publicResourceUrl: string;
   readonly publicResourceRouteId: string;
   readonly mppResourceEnabled: boolean;
@@ -404,6 +413,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     partnerRegistrationEnabled: value.PARTNER_REGISTRATION_ENABLED,
     mcpEnabled: value.MCP_ENABLED,
     publicResourceEnabled: value.PUBLIC_RESOURCE_ENABLED,
+    publicPaymentEvidenceEnabled: value.PUBLIC_PAYMENT_EVIDENCE_ENABLED,
     publicResourceUrl: value.PUBLIC_RESOURCE_URL,
     publicResourceRouteId: value.PUBLIC_RESOURCE_ROUTE_ID,
     mppResourceEnabled: value.MPP_RESOURCE_ENABLED,

@@ -295,6 +295,35 @@ export function createOpenApiDocument(config: AppConfig) {
     "/openapi.json": { get: { operationId: "getOpenApi", responses: jsonResponse } },
   };
 
+  if (config.publicPaymentEvidenceEnabled) {
+    paths["/v1/public/payments"] = { get: {
+      operationId: "getPublicPaymentEvidence", security: [],
+      summary: "Latest chain-verified direct payments for Nayori public resources",
+      description: "At most 25 settlements on the configured network, newest first. No query parameters. Separate from escrow jobs, external adoption and revenue. Only the public Nayori merchant and its configured resource URLs are included. Delivery is ledger status, not an on-chain claim. Cached internally for 60 seconds; never serves stale data on verification failure.",
+      responses: {
+        "200": { description: "Verified payment window (not lifetime totals)", content: { "application/json": { schema: {
+          type: "object", required: ["schemaVersion", "network", "generatedAt", "dataStatus", "scope", "limit", "hasMore", "excludedCount", "payments"],
+          properties: {
+            schemaVersion: { type: "integer", const: 1 }, network: { type: "string", enum: ["stacks:1", "stacks:2147483648"] },
+            generatedAt: { type: "string", format: "date-time" }, dataStatus: { const: "live" }, scope: { const: "nayori-public-resources" },
+            limit: { const: 25 }, hasMore: { type: "boolean" }, excludedCount: { type: "integer", minimum: 0, maximum: 25 },
+            payments: { type: "array", maxItems: 25, items: { type: "object", additionalProperties: false,
+              required: ["txid", "protocol", "asset", "amountAtomic", "decimals", "payer", "payTo", "feeMicroStx", "blockHeight", "confirmedAt", "deliveryStatus"],
+              properties: {
+                txid: { type: "string", pattern: "^0x[0-9a-f]{64}$" }, protocol: { enum: ["x402", "mpp"] }, asset: { enum: ["STX", "sBTC", "USDCx"] },
+                amountAtomic: { type: "string", pattern: "^(0|[1-9][0-9]{0,38})$" }, decimals: { enum: [6, 8] },
+                payer: { type: "string" }, payTo: { type: "string" }, feeMicroStx: { type: "string", pattern: "^(0|[1-9][0-9]{0,38})$" },
+                blockHeight: { type: "integer", minimum: 1 }, confirmedAt: { type: "string", format: "date-time" },
+                deliveryStatus: { enum: ["delivery_pending", "delivering", "delivered", "failed", "expired", "unavailable"] },
+              } } },
+          },
+        } } } },
+        "400": { description: "Query parameters are not supported" },
+        "503": { description: "Payment source cannot be verified; do not infer zero payments" },
+      },
+    } };
+  }
+
   if (config.publicResourceEnabled) {
     paths["/v1"] = {
       get: {

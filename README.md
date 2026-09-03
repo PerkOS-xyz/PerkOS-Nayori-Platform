@@ -330,6 +330,33 @@ and [`docs/plans/2026-08-27-partner-pilot-oauth-mcp-design.md`](docs/plans/2026-
 and [`docs/plans/2026-08-27-external-oauth-resource-server-design.md`](docs/plans/2026-08-27-external-oauth-resource-server-design.md)
 for the approved designs and security boundaries.
 
+## Public direct-payment evidence
+
+`GET /v1/public/payments` is an opt-in, unauthenticated facilitator endpoint. It is disabled by
+default (`PUBLIC_PAYMENT_EVIDENCE_ENABLED=false`). Enable it only on the facilitator after QA
+verification, with `STACKS_NETWORK` and the canonical Hiro endpoint matched, and explicit
+`PUBLIC_RESOURCE_URL` / `MPP_RESOURCE_URL` for that environment. QA uses
+`https://qa.nayori.ai/api/v1` and `https://qa.nayori.ai/api/mpp/v1`; production uses the apex equivalents.
+No migration or signing credential is required. Disabling the flag removes the route and its OpenAPI entry.
+
+The database projection selects only confirmed, receipted settlements for `nayori-public-resource`
+and those exact resource URLs, newest first. Every candidate is checked against canonical Hiro
+transaction status, block/hash, payer and one exact transfer of the configured canonical asset.
+Up to 25 candidates are checked (four concurrent requests); `hasMore` means older records exist.
+`excludedCount` reports candidates omitted after chain verification. These are window totals, not
+lifetime revenue. An outage returns sanitized HTTP 503, not a fabricated zero or stale success.
+The service uses a 60-second singleflight cache and bounded database/fetch timeouts and payloads.
+
+Only transaction ID, protocol, token/atomic amount/decimals, payer, recipient, fee, block,
+confirmation timestamp and delivery status are public. Delivery status is a facilitator-ledger
+observation, not a chain fact. Settlement/quote/receipt identifiers, signatures, raw transactions,
+merchant credentials and paid response bodies are never projected. No arbitrary merchant, wallet,
+URL or query parameter is accepted. The endpoint cannot broadcast or retrieve a paid resource.
+
+The Web consumes this feed through `/api/payments.json` and presents it separately from escrow,
+reputation and adoption counters. Internal payments remain internal operational evidence. A wallet
+is not considered an external customer merely because it is unknown.
+
 ## Milestone 2 alignment
 
 This platform helps produce a stronger SDK demo and external pilot, but it does not replace the M2
