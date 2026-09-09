@@ -25,7 +25,7 @@ function requireSafe(ok: unknown): asserts ok { if (!ok) throw new PrivateEviden
 function inNetwork(address: string, network: "testnet" | "mainnet") {
   return validateStacksAddress(address) && (network === "testnet" ? /^(ST|SN)/ : /^(SP|SM)/).test(address);
 }
-function context(input: unknown): PrivateEvidenceContext {
+export function validateEvidenceContext(input: unknown): PrivateEvidenceContext {
   const result = contextSchema.safeParse(input); requireSafe(result.success);
   const c = result.data;
   const parts = c.contract.split(".");
@@ -35,6 +35,7 @@ function context(input: unknown): PrivateEvidenceContext {
   return { network: c.network, contract: c.contract, jobId: c.jobId, provider: c.provider,
     sha256: c.sha256, mediaType: c.mediaType, sizeBytes: c.sizeBytes };
 }
+const context = validateEvidenceContext;
 
 /** Caller must supply the trusted issuer's key resolver, not token-selected jwks_url/jku. */
 export async function authenticateEvidence(input: {

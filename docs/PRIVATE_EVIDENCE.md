@@ -2,8 +2,9 @@
 
 ## Status
 
-This QA source introduces **security primitives, not an available upload service**. No routes,
-database migrations, OAuth grants or MCP tools are enabled by this change. Production is unchanged.
+This QA source introduces **security/storage primitives, not an available upload service**. Migration
+006 creates an empty encrypted-storage table when migrations are run. No routes, OAuth grants,
+operational encryption keys or MCP tools are enabled by this change. Production is unchanged.
 The private path must not fall back to public files or bearer tokens embedded in URLs.
 
 ## Identity and job authorization
@@ -44,6 +45,32 @@ The service operator and authorized evaluator process can access plaintext in me
 end-to-end encryption against the operator. Ciphertext at rest alone is not access authorization.
 
 ## Mandatory gates before enabling private uploads
+
+### Durable storage adapter (inactive)
+
+`PostgresPrivateEvidenceStore` accepts bytes only after an injected fresh authorization callback.
+It validates/hash-checks and encrypts before SQL. Each read reauthorizes before lookup and again
+before decrypting; the integrating service must supply real token/chain checks, never a no-op.
+Callbacks are an internal trust boundary, not externally supplied code or a replacement for OAuth.
+
+One transaction-scoped PostgreSQL advisory lock serializes capacity checks and writes across
+processes, with bounded SQL/lock waits. Limits are five files / 16000 plaintext bytes per job,
+8192 per file, plus operator-selected global record/envelope-byte caps (hard ceilings 100000 records
+and 1 GiB). These caps exclude PostgreSQL indexes, WAL and backups; provision disk separately.
+No plaintext is sent to SQL. Immutable duplicate uploads return the original expiry without
+overwriting ciphertext or extending retention. Unknown/expired/tampered records fail closed.
+
+Retention duration is mandatory configuration, not a default policy. Expired records remain counted
+and stored: expiry denies API reads but is **not physical deletion**, backup erasure or cryptographic
+shredding. A deletion/backup/rotation/recovery procedure remains an activation gate. Active-key
+selection plus reading older keys is tested, but bulk re-encryption and retirement are not implemented.
+There are no new production connections, runtime keys, routes, or background cleanup jobs.
+
+The PostgreSQL test uses a disposable schema and fixture keys, exercises concurrent retry/quota
+behavior, re-creates the adapter, tests provider reassignment, evaluator restrictions, tampering
+and expiry. It is not an HTTP/MCP/evaluator E2E, nor a recovery-from-backup test.
+
+### Remaining activation checklist
 
 - Durable, encrypted storage with atomic per-job/file/global quotas, immutable content, bounded
   concurrency, retention/deletion policy and key rotation/recovery tests. No in-memory production substitute.

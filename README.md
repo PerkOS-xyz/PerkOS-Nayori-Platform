@@ -6,8 +6,9 @@ Commerce Agent by PerkOS.
 ## Current status
 
 QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
-authentication, per-job role checks and authenticated encryption. **Private uploads are not enabled**:
-HTTP/storage, issuer scopes, MCP and evaluator privacy integration must pass their gates first.
+authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
+adapter with atomic quotas. **Private uploads are not enabled**: HTTP/storage lifecycle, issuer
+scopes, MCP and evaluator privacy integration must pass their gates first.
 
 This repository implements the **multi-protocol paid-resource, external-OAuth and network-pinned settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
