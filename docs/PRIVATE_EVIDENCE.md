@@ -2,6 +2,11 @@
 
 ## Status
 
+**Architecture update:** [Direct S3 uploads](S3_PRIVATE_EVIDENCE.md) are the selected next backend.
+The PostgreSQL encrypted-content implementation below is historical/inactive and must not be
+activated alongside it. Shared identity/role checks remain applicable. S3 signed capabilities
+are intentionally short-lived bearer credentials, unlike OAuth tokens (which never go in URLs).
+
 This QA source introduces **security/storage primitives, not an available upload service**. Migration
 006 creates an empty encrypted-storage table when migrations are run. No routes, OAuth grants,
 operational encryption keys or MCP tools are enabled by this change. Production is unchanged.

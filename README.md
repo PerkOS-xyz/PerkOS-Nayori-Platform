@@ -5,6 +5,11 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
+New candidate: [direct S3 private evidence](docs/S3_PRIVATE_EVIDENCE.md). Nayori authorizes a
+short-lived direct upload, verifies S3 checksum/size/version, and stores metadata only in PostgreSQL.
+Downloads are authorized per job and pinned to the verified S3 version. **Not enabled or deployed**;
+real AWS/SQL integration, lifecycle and SDK/MCP/evaluator gates remain outstanding.
+
 QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
 authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
 adapter with atomic quotas, a fail-closed issuer identity client and an **unmounted private HTTP
