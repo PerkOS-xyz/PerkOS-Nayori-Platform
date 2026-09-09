@@ -80,7 +80,8 @@ overwriting ciphertext or extending retention. Unknown/expired/tampered records 
 Retention duration is mandatory configuration, not a default policy. Expired records remain counted
 and stored: expiry denies API reads but is **not physical deletion**, backup erasure or cryptographic
 shredding. A deletion/backup/rotation/recovery procedure remains an activation gate. Active-key
-selection plus reading older keys is tested, but bulk re-encryption and retirement are not implemented.
+selection plus reading older keys is tested. An inactive operator batch re-encryption library is now
+available below; coordinated operational rotation and key retirement are not yet complete.
 There are no new production connections, runtime keys, routes, or background cleanup jobs.
 
 The PostgreSQL test uses a disposable schema and fixture keys, exercises concurrent retry/quota
@@ -138,6 +139,45 @@ a process crash/recovery test, or a complete MCP/evaluator E2E. Live testnet rea
 chain adapter are separate from that fixture integration.
 
 ### Activation checklist
+
+### Operator keyring and lifecycle primitives (inactive)
+
+`loadPrivateEvidenceKeyring` loads an operator-supplied JSON file once per process. The path must
+be absolute and canonical (no symlink components); the file must be regular, single-link, mode0600,
+owned by the process user or root and at most8192bytes. Schema: `activeKeyId` and `keys`, each entry
+having `id` and canonical base64 `keyBase64` encoding exactly32bytes. At most eight distinct IDs and
+distinct key materials are allowed; the active ID must exist. Reads return copies. File/config errors
+are generic. This is not an HSM, remote signer or guarantee of memory zeroization.
+
+The file belongs outside repositories and database backups; deliver it through a protected operator
+channel and mount read-only. No operational file is generated or deployed by this change. Every
+writer must restart with the new active key before retiring old material; old processes otherwise
+continue encrypting with their loaded snapshot. Keep prior keys for reads and backup recovery.
+
+`PrivateEvidenceMaintenance` is an operator-only library, not an HTTP/MCP endpoint or scheduler:
+
+- `rotateBatch(limit)`:1–100records, fixed network/contract scope, same capacity advisory lock as
+  uploads. Decrypt/authenticate and re-encrypt atomically; corrupted/missing-key records abort the
+  whole batch. Hashes, metadata and expiry are preserved. Increased envelope size must fit global
+  storage capacity. An inactive key can still be referenced outside this maintenance scope.
+- `purgeExpired(limit, execute=false)`: dry-run by default; explicit execution deletes only expired
+  scoped rows, up to100. It never deletes keys or touches backups. This is logical PostgreSQL row
+  deletion, not disk/WAL/replica erasure, immediate filesystem reclamation or cryptographic shredding.
+- After a purge, no immutable tombstone remains; a still-authorized funded provider may upload the
+  same bytes as a new record. Do not describe this as permanent content revocation.
+
+Operational retention and backup windows remain an explicit policy decision, not baked-in defaults.
+Expiry always blocks reads even in a restored backup, but restoration can resurrect previously
+purged ciphertext. Before reopening restored data, apply retention/deletion policy and verify keys
+and current identity/job authorization. Do not retire any key until all writers, all relevant records,
+and every retained backup/replica have been accounted for. No automatic key destruction is provided.
+
+Tests use temporary fixture key files and disposable PostgreSQL: file validation, copy isolation,
+rotation/read with current keys, unchanged expiry, batch rollback on tampering, dry-run, scope,
+idempotent purge and active-record preservation. A full pg_dump/restore plus operational key recovery
+exercise remains required before activation; these tests must not be presented as that exercise.
+
+### Remaining activation work
 
 - Durable, encrypted storage with atomic per-job/file/global quotas, immutable content, bounded
   concurrency, retention/deletion policy and key rotation/recovery tests. No in-memory production substitute.
