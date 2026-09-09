@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Hono } from "hono";
 
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -44,6 +45,16 @@ function makeApp(database: DatabaseHealth = new FakeDatabase()) {
 }
 
 describe("Nayori foundation API", () => {
+  it("mounts the private boundary only when explicitly supplied and retains security headers", async () => {
+    const boundary = new Hono();
+    boundary.post("/v1/private-evidence/prepare", c => c.json({ error: "private_evidence_access_denied" }, 403));
+    const plain = makeApp().app;
+    expect((await plain.request("/v1/private-evidence/prepare", { method: "POST" })).status).toBe(404);
+    const app = createApp({ config, database: new FakeDatabase(), logger: new MemoryLogger(), privateEvidenceApp: boundary });
+    const response = await app.request("/v1/private-evidence/prepare", { method: "POST" });
+    expect(response.status).toBe(403); expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("strict-transport-security")).toContain("max-age=");
+  });
   it("refuses to start quote issuance without a wired quote service", () => {
     const quoteConfig = loadConfig({
       DATABASE_URL: "postgresql://nayori:test@localhost:5432/nayori_test",

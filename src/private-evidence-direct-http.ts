@@ -5,6 +5,7 @@ import { createIssuerEvidenceIdentityCheck } from "./evidence-issuer-client.js";
 import { readPrivateEvidenceJson } from "./private-evidence-http.js";
 import { authenticateEvidence, authorizeEvidence, type PrivateEvidenceJob } from "./private-evidence-security.js";
 import type { createDirectEvidenceService, DirectEvidenceAuthorize } from "./private-evidence-direct.js";
+import { createEvidenceAdmission } from "./private-evidence-policy.js";
 
 const prepare = z.object({ context: z.unknown() }).strict();
 const file = z.object({ id: z.string().uuid() }).strict();
@@ -18,6 +19,7 @@ export function createDirectEvidenceHttp(options: {
   service: ReturnType<typeof createDirectEvidenceService>; issuerFetcher?: typeof fetch;
 }) {
   const app = new Hono(), allowedContracts = Object.freeze([...options.allowedContracts]);
+  const admit = createEvidenceAdmission();
   let inflight = 0;
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store"); c.header("Pragma", "no-cache");
@@ -37,7 +39,8 @@ export function createDirectEvidenceHttp(options: {
           issuer: options.issuer, audience: options.audience, keys: options.keys,
           activeIdentity: createIssuerEvidenceIdentityCheck({ issuer: options.issuer, authorization, scope,
             isMerchantActive: options.isMerchantActive, fetcher: options.issuerFetcher }) });
-        await authenticate();
+        const initialIdentity = await authenticate();
+        if (!admit(initialIdentity.walletAddress, operation)) return c.json({ error: "private_evidence_rate_limited" }, 429);
         const body = await readPrivateEvidenceJson(c.req.raw);
         const authorize: DirectEvidenceAuthorize = async (context, requestedScope) => {
           if (scope !== requestedScope) throw Error("denied");

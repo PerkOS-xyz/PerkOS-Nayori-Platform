@@ -21,10 +21,13 @@ function ttl(seconds: number) {
 }
 
 /** Region/bucket are operator configuration. No caller endpoints, bucket names or credentials. */
-export function createS3EvidenceObjects(options: { bucket: string; region: string; accountId: string }): EvidenceObjects {
+export function createS3EvidenceObjects(options: { bucket: string; region: string; accountId: string;
+  credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string } }): EvidenceObjects {
   if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(options.bucket) ||
       !/^[a-z]{2}-[a-z]+-\d$/.test(options.region) || !/^\d{12}$/.test(options.accountId)) throw deny();
   const client = new S3Client({ region: options.region, maxAttempts: 2,
+    // AWS decorates resolved identities with internal metadata; keep our frozen secret snapshot intact.
+    ...(options.credentials ? { credentials: { ...options.credentials } } : {}),
     requestHandler: { connectionTimeout: 2000, requestTimeout: 5000 },
     // Do not inherit an endpoint override that could receive signed requests/credentials.
     endpoint: `https://s3.${options.region}.amazonaws.com` });

@@ -58,6 +58,7 @@ export type CreateAppOptions = {
   readonly paidResourceService?: PaidResourceService;
   readonly mppResourceService?: MppResourceService;
   readonly publicPaymentService?: PublicPaymentService;
+  readonly privateEvidenceApp?: Hono;
 };
 
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -959,6 +960,8 @@ export function createApp(options: CreateAppOptions): Hono<{ Variables: AppVaria
       }
     }
   }
+
+  if (options.privateEvidenceApp) app.route("/", options.privateEvidenceApp);
 
   app.notFound((context) =>
     context.json(

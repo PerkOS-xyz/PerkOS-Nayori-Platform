@@ -22,7 +22,8 @@ All API calls require a wallet-bound OAuth token with the applicable `evidence:w
    returns a signed GET for the **stored version**, lasting at most60seconds and no later than
    retention expiry. Only completed files may be downloaded.
 
-Routes exist as an **unmounted factory**, not available public endpoints. No SDK/MCP release yet.
+Routes now have **explicit QA-only runtime wiring**, disabled by default and not enabled in the
+deployed app. No SDK/MCP release yet.
 Limits remain8192bytes/file, text/plain or application/json, five files/16000bytes per job,
 100000reservations/1GiB globally. Pending and expired reservations count until operator cleanup.
 Quota failure, signing/network failure and expiry fail closed, not fallback to public storage.
@@ -44,8 +45,10 @@ Quota failure, signing/network failure and expiry fail closed, not fallback to p
   put on chain, include in model prompts, or forward OAuth tokens across origins.
 - Revocation stops new authorizations, not already issued S3 capabilities. Up to60seconds of
   residual download access is intentional; immediate revocation requires proxy downloads.
-- No automatic retention default: constructor requires an explicit operator choice. Proposed
-  30+7day policy remains unapproved. Metadata backup does not back up the object contents.
+- Approved policy:30days of access from the upload reservation, plus at most7additional days in
+  backups. Retries/restores never extend expiry. Runtime fixes access TTL to30days; generic service
+  constructors still take an explicit TTL for tests. Metadata backup does not back up objects.
+  Backup infrastructure/retention must be configured and verified separately before activation.
 
 ## QA storage validation (2026-09-09)
 
@@ -67,26 +70,67 @@ encrypted TLS PutObject/GetObject/GetObjectVersion allowed only for the QA testn
 delete/version-delete/ACL writes, mainnet prefix and insecure transport denied. This policy was
 **not attached**, and no IAM user, role or access key was created. Simulation is not live IAM proof.
 
+Subsequent verification created a dedicated non-console QA service identity and attached the narrow
+object policy. Its credential is stored only in an owner-only file outside Git on the operator Mac,
+not on the VPS.22real AWS checks now pass with that service identity, including denied bucket listing,
+version deletion and access outside the testnet prefix; both POST and GET expiry; and allowed/denied
+CORS preflights. These are real HTTP preflights, not a browser automation test. The new cleanup adapter
+deleted the two synthetic versions using a separate operator identity. It is not an end-to-end app test.
+
+The AWS SDK decorates credential identity objects. The adapter copies the immutable secret snapshot
+before passing it to AWS; the initial live test exposed this incompatibility and a regression test
+covers the fix. Public QA discovery confirms audience `https://api.qa.nayori.ai` (not the landing origin).
+
+## QA runtime and operator cleanup
+
+`S3_EVIDENCE_QA_ENABLED` is absent/false by default. Only the exact string `true` opts in; enabled
+configuration requires Stacks testnet, the testnet Hiro API, OAuth issuer `https://oauth.qa.nayori.ai`
+and audience `https://api.qa.nayori.ai`. Mainnet/production origins are rejected. Configure:
+
+- `S3_EVIDENCE_BUCKET`, `S3_EVIDENCE_REGION=us-east-1`, `S3_EVIDENCE_ACCOUNT_ID`;
+- `S3_EVIDENCE_CONTRACTS`: comma-separated allowed deployed testnet contracts;
+- `S3_EVIDENCE_CREDENTIALS_FILE`: absolute, canonical, non-symlink JSON file, mode0600, owned by
+  the process/root, at most8KiB: `accessKeyId`, `secretAccessKey`, optional `sessionToken`.
+
+Never put actual credentials in these docs, Git, logs or agent prompts. Runtime has no implicit
+AWS environment/login fallback. Rotating a persistent service credential requires a controlled restart.
+Admission allows10prepare and60complete/download requests per wallet/operation/minute per process,
+with bounded memory. This supplements SQL quotas; it is not a shared distributed rate limiter.
+
+Migration008 adds `purged_at` tombstones. The separate `npm run evidence:cleanup:qa` CLI uses the
+same explicit QA settings plus `S3_EVIDENCE_CLEANUP_CREDENTIALS_FILE` for a separate privileged
+operator identity. It defaults to dry-run and one row; `S3_EVIDENCE_CLEANUP_BATCH` is1..10.
+Only `CONFIRM_QA_EVIDENCE_PURGE=yes` executes deletion. Never grant delete/list to the HTTP identity.
+
+Cleanup locks eligible rows (expired, or incomplete uploads more than60seconds beyond upload expiry),
+deletes only enumerated exact object versions/markers, verifies absence, then writes the tombstone.
+S3 failure rolls SQL back; retries safely remove remaining versions. Active rows/pinned versions
+are untouched. Truncated listings, more than100versions, wrong prefixes and unversioned objects
+fail closed for operator review. Tombstones cease counting toward capacity; metadata pruning waits
+until original access expiry plus7days. A restored backup must reapply expiry/cleanup before access.
+SQL deletion is not physical erasure of WAL/backups. No cleanup schedule or backup copy is installed
+by the code change; those deployment checks remain mandatory. No public maintenance API exists.
+
 ## Remaining activation gates
 
 1. Preserve verified QA bucket settings: Block Public Access, bucket-owner-enforced ownership/no
    ACLs, versioning Enabled, SSE-S3 and TLS-only policy. Production needs a separate bucket.
-2. Least-privilege service IAM for exact evidence prefix; no list/public/delete-version permission
-   for agents. Credentials only backend via trusted credential chain, never SDK config or Git.
+2. Provision the tested restricted service credential to the QA runtime securely; never root.
+   Do not transfer operator cleanup permissions to the HTTP service or agents.
 3. Exact QA origin CORS for browser POST; agents do not require CORS. Do not use wildcard origins.
-4. Agreed retention, pinned-version-safe orphan cleanup, replay-cost controls, rate limits, bucket
-   cost alarms and recovery test covering object versions **and** metadata. Never purge rows first.
-5. Apply migration007, assemble bounded PG pool and adapters, mount factory with trusted OAuth/chain
-   dependencies. Do not enable the old write/read factory alongside the new backend.
-6. Repeat AWS tests using the restricted operational service identity, then SDK/MCP helpers,
-   evaluator private reads, public-output leak checks and full QA E2E. Test POST expiry and actual
-   browser-origin behavior as well; the completed run checked GET expiry and bucket CORS config.
+4. Schedule/monitor the approved retention cleanup and backup cap, add replay-cost alarms and test
+   recovery covering object versions **and** metadata. Never purge rows first.
+5. Apply migrations007/008 and opt in only after these gates pass, with issuer evidence identity
+   enabled and explicit grants. Do not enable the old write/read factory alongside the new backend.
+6. SDK/MCP helpers, evaluator private reads, public-output leak checks, browser workflow and full QA E2E.
 
-Current validation:318tests pass in a disposable VPS PostgreSQL environment, including concurrent
-quota reservations, first-version finalization and expiry; lint/typecheck/build pass. HTTP tests
-use real JWT verification with fixture issuer/job data. Automated unit S3 tests mock AWS commands;
-the separate16check operator-run AWS probe above covers real uploads. No application service or
-database was changed or activated by that probe.
+Current validation: 337 tests pass in a disposable VPS PostgreSQL environment, including concurrent
+quota reservations, first-version finalization, expiry, cleanup rollback and tombstones;
+lint/typecheck/build pass. HTTP tests use real JWT verification with fixture issuer/job data.
+Automated unit S3 tests mock AWS commands; the separate 22-check restricted-identity AWS probe
+covers real uploads, downloads, expiration, CORS and permission boundaries. Fixture versions were
+deleted using the operator cleanup adapter. Application containers remained unchanged. This is
+not yet a deployed OAuth/SDK/MCP/evaluator end-to-end workflow.
 
 ## AWS references
 

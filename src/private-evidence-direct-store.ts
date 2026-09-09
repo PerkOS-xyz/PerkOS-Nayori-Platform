@@ -20,8 +20,8 @@ export class PostgresDirectEvidenceMetadata implements DirectEvidenceMetadata {
     try {
       await db.query("BEGIN");
       await db.query("SELECT pg_advisory_xact_lock(hashtext('nayori-direct-evidence-capacity-v1'))");
-      const global = (await db.query("SELECT count(*)::int AS count, coalesce(sum(size_bytes),0)::bigint AS bytes FROM private_evidence_objects")).rows[0]!;
-      const job = (await db.query("SELECT count(*)::int AS count, coalesce(sum(size_bytes),0)::bigint AS bytes FROM private_evidence_objects WHERE network=$1 AND contract=$2 AND job_id=$3", [c.network, c.contract, c.jobId])).rows[0]!;
+      const global = (await db.query("SELECT count(*)::int AS count, coalesce(sum(size_bytes),0)::bigint AS bytes FROM private_evidence_objects WHERE purged_at IS NULL")).rows[0]!;
+      const job = (await db.query("SELECT count(*)::int AS count, coalesce(sum(size_bytes),0)::bigint AS bytes FROM private_evidence_objects WHERE network=$1 AND contract=$2 AND job_id=$3 AND purged_at IS NULL", [c.network, c.contract, c.jobId])).rows[0]!;
       if (global.count >= 100000 || BigInt(global.bytes) + BigInt(c.sizeBytes) > 1073741824n ||
           job.count >= 5 || BigInt(job.bytes) + BigInt(c.sizeBytes) > 16000n) throw new PrivateEvidenceDenied();
       await db.query(`INSERT INTO private_evidence_objects
@@ -34,13 +34,13 @@ export class PostgresDirectEvidenceMetadata implements DirectEvidenceMetadata {
     finally { db.release(); }
   }
   async find(id: string): Promise<DirectEvidenceRecord | null> {
-    const result = await this.pool.query("SELECT * FROM private_evidence_objects WHERE id=$1", [id]);
+    const result = await this.pool.query("SELECT * FROM private_evidence_objects WHERE id=$1 AND purged_at IS NULL", [id]);
     return result.rows[0] ? decode(result.rows[0]) : null;
   }
   async finalize(id: string, object: EvidenceObject): Promise<DirectEvidenceRecord> {
     const result = await this.pool.query(`UPDATE private_evidence_objects SET version_id=coalesce(version_id,$2)
       WHERE id=$1 AND object_key=$3 AND sha256=$4 AND size_bytes=$5 AND media_type=$6
-      AND expires_at > now() AND (version_id IS NOT NULL OR upload_expires_at > now()) RETURNING *`,
+      AND purged_at IS NULL AND expires_at > now() AND (version_id IS NOT NULL OR upload_expires_at > now()) RETURNING *`,
     [id, object.versionId, object.key, Buffer.from(object.checksum, "base64").toString("hex"), object.size, object.mediaType]);
     if (!result.rows[0]) throw new PrivateEvidenceDenied();
     return decode(result.rows[0]);

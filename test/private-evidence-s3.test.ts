@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ send: vi.fn(), post: vi.fn(), sign: vi.fn() }));
+const mocks = vi.hoisted(() => ({ send: vi.fn(), post: vi.fn(), sign: vi.fn(), config: vi.fn() }));
 vi.mock("@aws-sdk/client-s3", () => ({
-  S3Client: class { send = mocks.send; },
+  S3Client: class { send = mocks.send; constructor(config: unknown) { mocks.config(config); } },
   HeadObjectCommand: class { constructor(public input: unknown) {} },
   GetObjectCommand: class { constructor(public input: unknown) {} },
 }));
@@ -17,6 +17,13 @@ const checksum = Buffer.from(context.sha256, "hex").toString("base64");
 const adapter = () => createS3EvidenceObjects({ bucket: "nayori-fixture-only", region: "us-east-1", accountId: "123456789012" });
 beforeEach(() => vi.resetAllMocks());
 describe("S3 direct adapter command contracts (mocked AWS)", () => {
+  it("copies frozen credentials before AWS adds internal identity metadata", () => {
+    const credentials = Object.freeze({ accessKeyId: "fixture", secretAccessKey: "fixture" });
+    createS3EvidenceObjects({ bucket: "fixture-bucket", region: "us-east-1", accountId: "123456789012", credentials });
+    const supplied = mocks.config.mock.calls[0]![0].credentials;
+    expect(supplied).toEqual(credentials); expect(supplied).not.toBe(credentials);
+    expect(Object.isFrozen(supplied)).toBe(false);
+  });
   it("signs exact key, size, content type, SHA256 and encryption for five minutes", async () => {
     await adapter().upload(key, context, 300);
     const request = mocks.post.mock.calls[0]![1];
