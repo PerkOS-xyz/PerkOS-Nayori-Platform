@@ -111,6 +111,34 @@ mount it. Its tests inject storage/chain fixtures; they are not a deployed datab
 
 ### Remaining integration and operational work
 
+### Chain adapter and explicit runtime assembly (inactive)
+
+`createPrivateEvidenceChain` uses only the operator's HTTPS node and allowlisted contracts. It
+checks `/v2/info` network and sync status, resolves the tip through `/extended/v2/blocks/{height}`,
+checks canonical hash/height and block age (maximum five minutes, thirty seconds future tolerance),
+then reads `get-job` and `get-escrow-balance` pinned to the **index_block_hash**, not the block hash.
+It checks the current tip again before returning. Moving tips, stale nodes, wrong networks,
+malformed/noncanonical Clarity, unexpected principals or failed reads deny access; callers may
+retry, but no stale authorization is cached. A five-second total deadline and 32KiB response caps
+bound remote I/O. This intentionally favors denial over availability during node lag or tip changes.
+The configured node remains a trusted data source; HTTPS is not an independent consensus proof.
+
+`createPrivateEvidenceRuntime` assembles the bounded PostgreSQL pool (eight connections, five-second
+connection/query/statement limits), encrypted store, Platform-local active merchant query, the
+issuer's fixed `/oauth/jwks.json`, chain adapter and HTTP factory. It takes an explicit operator
+keyring and retention/quota policy, and exposes `close()` for pool shutdown. Construction does not
+run migrations, create credentials or mount routes in `server.ts`. No private keys enter request data.
+
+The HTTP/PostgreSQL integration test runs a real loopback server against a disposable database,
+with signed fixture tokens and simulated issuer/chain responses. It covers concurrent immutable
+retries, ciphertext-only SQL, consumer/provider/evaluator roles, new HTTP/store instances reading
+the same persisted record, revocation, cross-job denial and ciphertext tampering. The loopback
+fixture uses HTTP without secrets; it is not a public TLS deployment, an operational keyring test,
+a process crash/recovery test, or a complete MCP/evaluator E2E. Live testnet read-only checks of the
+chain adapter are separate from that fixture integration.
+
+### Activation checklist
+
 - Durable, encrypted storage with atomic per-job/file/global quotas, immutable content, bounded
   concurrency, retention/deletion policy and key rotation/recovery tests. No in-memory production substitute.
 - Issuer support for narrow scopes and reliable activation/revocation checks; authentication must preserve
