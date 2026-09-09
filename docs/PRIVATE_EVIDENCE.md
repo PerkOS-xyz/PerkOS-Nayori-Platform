@@ -14,7 +14,8 @@ issuer, resource audience, `at+jwt` type, required expiry/issued-at claims and a
 lifetime. It requires the intended `evidence:read` or `evidence:write` scope and a valid network-specific
 Stacks wallet. Merchant API keys do not prove wallet identity and are rejected by this path.
 The caller must provide an authoritative active-client/tenant check; lookup failure denies access.
-The existing merchant authenticator remains unchanged. The issuer does not grant these new scopes yet.
+The existing merchant authenticator remains unchanged. The companion issuer supports explicit evidence
+grants, but their issuance and identity endpoint remain disabled in QA until activation gates pass.
 
 `authorizeEvidence` requires fresh data from a trusted, allowlisted chain adapter. Never pass a job,
 identity, network or contract chosen by an LLM as an authoritative backend result.
@@ -86,7 +87,29 @@ The PostgreSQL test uses a disposable schema and fixture keys, exercises concurr
 behavior, re-creates the adapter, tests provider reassignment, evaluator restrictions, tampering
 and expiry. It is not an HTTP/MCP/evaluator E2E, nor a recovery-from-backup test.
 
-### Remaining activation checklist
+### Private HTTP factory (inactive, not mounted)
+
+`createPrivateEvidenceHttp` composes token verification, the HTTPS issuer identity client, fresh
+chain authorization and the durable store interface. The production server does not instantiate or
+mount it. Its tests inject storage/chain fixtures; they are not a deployed database/MCP E2E.
+
+- `POST /v1/private-evidence/write`: JSON `{ "context": { ... }, "content": "UTF-8 text" }`.
+- `POST /v1/private-evidence/read`: JSON `{ "context": { ... } }`, authenticated attachment response.
+- Context is the exact network/allowlisted contract/job/provider/SHA-256/MIME/size binding documented
+  above, not authoritative job state. No credential or artifact metadata belongs in a query URL.
+- Bearer authentication and current issuer/merchant checks happen before body buffering. Scope and
+  chain authorization repeat before entering storage and through its callbacks. Reads recheck again
+  before exposing plaintext. Consumer uploads, changed assignments and revoked clients fail closed.
+- JSON transport is capped at 64 KiB (to accommodate escaped text), five seconds per body and eight
+  in-flight operations per factory. Actual artifacts remain limited to 8192 bytes by the store policy.
+  Trusted chain/key/database adapters must bound their own I/O; this is not a distributed rate limiter.
+- No anonymous GET, cookies, query credentials, compressed bodies, public URLs, CORS allowance,
+  body logging or cache. Responses use no-store, nosniff and attachment/CSP protection. Failures have
+  one generic403 payload so storage existence/errors do not leak through messages.
+- The reverse proxy must enforce public HTTPS, reject oversized headers, disable caching and avoid
+  sensitive request/response logging. Internal transport encryption is a separate deployment concern.
+
+### Remaining integration and operational work
 
 - Durable, encrypted storage with atomic per-job/file/global quotas, immutable content, bounded
   concurrency, retention/deletion policy and key rotation/recovery tests. No in-memory production substitute.
