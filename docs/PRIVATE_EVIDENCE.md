@@ -46,6 +46,22 @@ end-to-end encryption against the operator. Ciphertext at rest alone is not acce
 
 ## Mandatory gates before enabling private uploads
 
+### Issuer identity client (inactive)
+
+`createIssuerEvidenceIdentityCheck` builds the `activeIdentity` callback for `authenticateEvidence`
+per request, using the **same** access token. It checks the local merchant before and after a
+POST to the configured HTTPS issuer's `/oauth/evidence/identity`. The requested evidence scope
+travels in a header; no body, query token, cookies, redirects or authorization cache are used.
+It requires an exact identity/scope match, valid remaining expiry and a strict JSON response
+of at most 1024 bytes. A five-second deadline covers local lookups, fetch and streamed response.
+Any failure denies access. Trusted database adapters should also enforce their own query timeouts;
+timing out authorization does not cancel arbitrary database callbacks internally.
+
+The companion OAuth source must enable its identity flag and grant evidence scopes explicitly.
+This module is **not wired into server routes**; no issuer calls or configuration changes occur
+in the existing runtime. Local merchant status is separate from issuer client status, and both
+are separate from on-chain job authorization. `agent:self` is not a private evidence grant.
+
 ### Durable storage adapter (inactive)
 
 `PostgresPrivateEvidenceStore` accepts bytes only after an injected fresh authorization callback.
