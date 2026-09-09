@@ -174,8 +174,31 @@ and every retained backup/replica have been accounted for. No automatic key dest
 
 Tests use temporary fixture key files and disposable PostgreSQL: file validation, copy isolation,
 rotation/read with current keys, unchanged expiry, batch rollback on tampering, dry-run, scope,
-idempotent purge and active-record preservation. A full pg_dump/restore plus operational key recovery
-exercise remains required before activation; these tests must not be presented as that exercise.
+idempotent purge and active-record preservation.
+
+### Completed disposable backup recovery rehearsal
+
+On2026-09-09, the deployed QA image at `c999d5fc4f7e327d3c9f500f356fd82a604517ca` passed
+a separate real `pg_dump -Fc` / `pg_restore --exit-on-error` rehearsal. The source database was
+removed before restoring into a new PostgreSQL container. Synthetic files and a separate ephemeral
+keyring were used; no operational database, wallet, credential or encryption key was accessed.
+
+Thirteen recovery checks passed: restored row inventory (including previously purged ciphertext),
+historical-key requirement, successful decryption, original expiry preservation, expired-file denial,
+fresh fixture-identity revocation, missing/wrong-key denial, re-encryption after restore, new-key read,
+reapplication of expiry cleanup, no TTL renewal and corruption denial. The SQL backup was also
+checked not to contain fixture plaintext or key material. Application container snapshots were unchanged.
+
+The fixture keyring stayed outside the dump in a tmpfs volume kept mounted throughout the exercise.
+All fixture databases, temporary containers/network and key material were removed afterward; only
+sanitized receipts/logs and the now-unreadable fixture ciphertext backup were retained externally.
+Receipt SHA-256: `da3729131a8b3a11cf618e118475a1e5adbb1f31745de0328e400a1e7ca95a1b`.
+
+This validates the cryptographic storage recovery path with disposable keys, not operational key
+custody, off-site backup access, point-in-time recovery, agreed backup deletion deadlines or the full
+OAuth/TLS/MCP/evaluator flow. Retention policy and operational recovery procedures still need approval
+and validation before activation. A restored backup must never reopen access solely because decryption
+works: apply current expiry/deletion policy and fresh identity/job checks first.
 
 ### Remaining activation work
 

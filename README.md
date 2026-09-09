@@ -13,6 +13,10 @@ PostgreSQL runtime assembly, operator file keyring and bounded rotation/expired-
 **Private uploads are not enabled**: server activation,
 storage lifecycle, issuer activation, MCP and evaluator privacy integration must pass their gates first.
 
+A disposable PostgreSQL backup/restore rehearsal has passed, including13recovery checks for key
+availability, expiry, revocation, rotation and corruption. This does not activate uploads or establish
+operational backup/key custody; see the [private evidence recovery status](docs/PRIVATE_EVIDENCE.md).
+
 This repository implements the **multi-protocol paid-resource, external-OAuth and network-pinned settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
 merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
