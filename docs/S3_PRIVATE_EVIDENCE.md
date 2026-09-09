@@ -1,4 +1,4 @@
-# Direct S3 private evidence — candidate, not enabled
+# Direct S3 private evidence — QA storage verified, app not enabled
 
 Nayori authorizes; agents upload directly to a **private, versioned S3 bucket** over HTTPS.
 PostgreSQL stores only job binding, hash, size, expiry and exact S3 object/version identifiers.
@@ -47,10 +47,30 @@ Quota failure, signing/network failure and expiry fail closed, not fallback to p
 - No automatic retention default: constructor requires an explicit operator choice. Proposed
   30+7day policy remains unapproved. Metadata backup does not back up the object contents.
 
-## Activation gates (outstanding)
+## QA storage validation (2026-09-09)
 
-1. Dedicated QA bucket: verify AWS account owner, region, Block Public Access, bucket-owner-enforced
-   ownership/no ACLs, versioning Enabled, default SSE-S3, TLS-only policy. Separate production bucket.
+A dedicated private QA bucket in us-east-1 was created and tested with synthetic bytes only.
+Sixteen real AWS checks passed: public access block, versioning, SSE-S3, owner-enforced/no ACLs,
+nonpublic bucket policy, exact QA CORS origin, successful direct POST, HEAD integrity/version,
+anonymous GET rejection, signed download/attachment/no-store, wrong bytes/size/type/key rejection,
+replay producing a new version while the pinned one remains readable, and expired GET rejection.
+The TLS-only bucket policy was read back. Both synthetic object versions were deleted and the
+bucket was verified empty, including delete markers. No production data was involved.
+
+Tests used the operator's temporary CLI login on the Mac, never copied to the VPS or persisted
+by the harness. This proves the S3 adapter, **not the operational service credential or the full
+OAuth/SQL/S3/MCP/evaluator E2E**. First harness attempt used the wrong local Node version; Node22
+rerun passed. No code change was needed in the S3 adapter.
+
+A proposed least-privilege identity policy passed24per-resource IAM Simulator decisions:
+encrypted TLS PutObject/GetObject/GetObjectVersion allowed only for the QA testnet prefix;
+delete/version-delete/ACL writes, mainnet prefix and insecure transport denied. This policy was
+**not attached**, and no IAM user, role or access key was created. Simulation is not live IAM proof.
+
+## Remaining activation gates
+
+1. Preserve verified QA bucket settings: Block Public Access, bucket-owner-enforced ownership/no
+   ACLs, versioning Enabled, SSE-S3 and TLS-only policy. Production needs a separate bucket.
 2. Least-privilege service IAM for exact evidence prefix; no list/public/delete-version permission
    for agents. Credentials only backend via trusted credential chain, never SDK config or Git.
 3. Exact QA origin CORS for browser POST; agents do not require CORS. Do not use wildcard origins.
@@ -58,13 +78,15 @@ Quota failure, signing/network failure and expiry fail closed, not fallback to p
    cost alarms and recovery test covering object versions **and** metadata. Never purge rows first.
 5. Apply migration007, assemble bounded PG pool and adapters, mount factory with trusted OAuth/chain
    dependencies. Do not enable the old write/read factory alongside the new backend.
-6. Real AWS upload/checksum/versioning/replay/expiry tests, then SDK/MCP helpers, evaluator private
-   reads, public-output leak checks and full QA E2E.
+6. Repeat AWS tests using the restricted operational service identity, then SDK/MCP helpers,
+   evaluator private reads, public-output leak checks and full QA E2E. Test POST expiry and actual
+   browser-origin behavior as well; the completed run checked GET expiry and bucket CORS config.
 
 Current validation:318tests pass in a disposable VPS PostgreSQL environment, including concurrent
 quota reservations, first-version finalization and expiry; lint/typecheck/build pass. HTTP tests
-use real JWT verification with fixture issuer/job data. S3 tests mock AWS commands: this is **not**
-evidence of real AWS uploads. No application service or database was changed.
+use real JWT verification with fixture issuer/job data. Automated unit S3 tests mock AWS commands;
+the separate16check operator-run AWS probe above covers real uploads. No application service or
+database was changed or activated by that probe.
 
 ## AWS references
 
