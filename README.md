@@ -8,7 +8,8 @@ Commerce Agent by PerkOS.
 QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
 authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
 adapter with atomic quotas, a fail-closed issuer identity client and an **unmounted private HTTP
-factory** for authenticated uploads/downloads. **Private uploads are not enabled**: runtime wiring,
+factory** for authenticated uploads/downloads, a network/tip-pinned chain reader and explicit
+PostgreSQL runtime assembly. **Private uploads are not enabled**: server activation,
 storage lifecycle, issuer activation, MCP and evaluator privacy integration must pass their gates first.
 
 This repository implements the **multi-protocol paid-resource, external-OAuth and network-pinned settlement boundary**. It
