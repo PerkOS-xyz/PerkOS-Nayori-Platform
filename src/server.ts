@@ -15,8 +15,11 @@ import { createQuoteSigner } from "./quote-signing.js";
 import { createPublicPaymentService } from "./public-payments.js";
 import { createQuoteService } from "./quotes.js";
 import { createSettlementService } from "./settlement.js";
+import { createDirectEvidenceRuntime, loadDirectEvidenceConfig } from "./private-evidence-direct-runtime.js";
 
 const config = loadConfig();
+const directEvidenceConfig = loadDirectEvidenceConfig(process.env);
+const directEvidence = directEvidenceConfig ? await createDirectEvidenceRuntime(directEvidenceConfig) : undefined;
 const database = new PostgresDatabase(config);
 const quoteSigner = config.quoteIssuanceEnabled ? await createQuoteSigner(config) : undefined;
 const oauthSigner = config.oauthEnabled && config.oauthMode === "embedded"
@@ -90,6 +93,7 @@ const app = createApp({
   mppResourceService,
   publicPaymentService: config.publicPaymentEvidenceEnabled
     ? createPublicPaymentService({ config, store: database }) : undefined,
+  privateEvidenceApp: directEvidence?.app,
 });
 
 const server = serve(
@@ -104,6 +108,7 @@ const server = serve(
       address: info.address,
       port: info.port,
       release: config.releaseSha,
+      privateEvidenceEnabled: Boolean(directEvidence),
       quoteIssuanceEnabled: config.quoteIssuanceEnabled,
       paymentVerificationEnabled: config.paymentVerificationEnabled,
       settlementEnabled: config.settlementEnabled,
@@ -140,6 +145,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     });
   });
   await database.close();
+  await directEvidence?.close();
   consoleLogger.info({ event: "server_stopped" });
 }
 
