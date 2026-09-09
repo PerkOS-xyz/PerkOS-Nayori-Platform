@@ -58,10 +58,13 @@ Quota failure, signing/network failure and expiry fail closed, not fallback to p
    cost alarms and recovery test covering object versions **and** metadata. Never purge rows first.
 5. Apply migration007, assemble bounded PG pool and adapters, mount factory with trusted OAuth/chain
    dependencies. Do not enable the old write/read factory alongside the new backend.
-6. Real AWS upload/checksum/versioning/replay/expiry tests, PostgreSQL concurrent quota/finalize tests,
-   then SDK/MCP helpers, evaluator private reads, public-output leak checks and full QA E2E.
+6. Real AWS upload/checksum/versioning/replay/expiry tests, then SDK/MCP helpers, evaluator private
+   reads, public-output leak checks and full QA E2E.
 
-Current automated tests use mocked S3/service dependencies, not AWS infrastructure evidence.
+Current validation:318tests pass in a disposable VPS PostgreSQL environment, including concurrent
+quota reservations, first-version finalization and expiry; lint/typecheck/build pass. HTTP tests
+use real JWT verification with fixture issuer/job data. S3 tests mock AWS commands: this is **not**
+evidence of real AWS uploads. No application service or database was changed.
 
 ## AWS references
 
