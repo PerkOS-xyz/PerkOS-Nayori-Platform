@@ -11,7 +11,7 @@ const readSchema = z.object({ context: z.unknown() }).strict();
 const deny = () => new PrivateEvidenceDenied();
 
 /** Bound even chunked/slow request bodies; never use request.json() on untrusted streams. */
-async function readJson(request: Request): Promise<unknown> {
+export async function readPrivateEvidenceJson(request: Request): Promise<unknown> {
   if (request.headers.get("content-type") !== "application/json" || request.headers.has("content-encoding")) throw deny();
   const reader = request.body?.getReader();
   if (!reader) throw deny();
@@ -74,7 +74,7 @@ export function createPrivateEvidenceHttp(options: {
           activeIdentity: createIssuerEvidenceIdentityCheck({ issuer: trusted.issuer, authorization, scope,
             isMerchantActive: trusted.isMerchantActive, fetcher: trusted.issuerFetcher }) });
         await authenticate(); // Before buffering any user-supplied content.
-        const body = await readJson(c.req.raw);
+        const body = await readPrivateEvidenceJson(c.req.raw);
         const parsed = operation === "write" ? writeSchema.parse(body) : readSchema.parse(body);
         const context = Object.freeze(validateEvidenceContext(parsed.context));
         const authorize = async () => {
