@@ -13,6 +13,7 @@
     "db:migrate:production": "node dist/migrate.js",
     "dev": "tsx watch src/server.ts",
     "evidence:cleanup:qa": "node dist/private-evidence-maintain.js",
+    "evidence:backup:qa": "node dist/private-evidence-backup-operator.js",
     "lint": "eslint .",
     "merchant:provision": "tsx src/provision-merchant.ts",
     "merchant:provision:production": "node dist/provision-merchant.js",

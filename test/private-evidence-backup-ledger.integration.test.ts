@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { createEvidenceBackupLedger } from "../src/private-evidence-backup-ledger.js";
 import { recoverPrivateEvidence } from "../src/private-evidence-recover.js";
+import { inspectBackupLedger } from "../src/private-evidence-backup-diagnostics.js";
 
 describe.skipIf(process.env.DATABASE_INTEGRATION !== "true")("backup ledger PostgreSQL", () => {
   it("durably reserves, verifies, atomically restores and rejects unsafe retries", async () => {
@@ -33,6 +34,7 @@ describe.skipIf(process.env.DATABASE_INTEGRATION !== "true")("backup ledger Post
       expect((await pool.query("SELECT state FROM private_evidence_backups")).rows[0].state).toBe("pending");
       await ledger.verify(id, manifest, bytes);
       await ledger.verify(id, manifest, bytes);
+      expect(await inspectBackupLedger(pool, [contract])).toMatchObject({ inspected: 1, verified: 1, inconsistent: 0, quarantined: 0, truncated: false });
       expect((await ledger.loadRecovery(id)).manifest).toEqual(manifest);
       await expect(ledger.verify(id, { ...manifest, backupVersion: "other" }, bytes)).rejects.toThrow();
       await expect(ledger.commitRestore(id, "original", bytes)).rejects.toThrow();
