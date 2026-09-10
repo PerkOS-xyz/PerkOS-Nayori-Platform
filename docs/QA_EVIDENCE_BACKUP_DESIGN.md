@@ -46,9 +46,25 @@ source deletion, so cleanup cannot silently discard an unresolved backup. No pay
 S3 version, it atomically changes the source mapping and records that version. Same-version retry
 is idempotent; competing restores, tombstones and expiration are rejected. An ambiguous SQL
 commit must be reconciled by retrying the SAME version, never by deleting it blindly.
-The S3 restore writer/readback and cross-system orphan reconciliation are still not implemented.
+The S3 restore adapter now requires explicit restore credentials. It reads the exact backup
+version, verifies it against the ledger snapshot, and conditionally writes only to an absent
+primary key. Metadata tags bind the restored version to its backup/source version and expiry.
+A retry recognizes and reads back that same version instead of duplicating it; an untagged or
+conflicting existing primary is never overwritten. The operator orchestrator loads the ledger,
+performs verified S3 restore, then commits the SQL mapping. It never deletes a version in response
+to an ambiguous SQL failure. This handles interrupted restores while the evidence is unexpired;
+expired/orphaned cases still require reconciliation and scheduled cleanup.
+
+Restore identity needs primary Get/GetVersion, conditional Put and scoped ListBucket for absence
+detection. The application identity must not be broadened: S3 can return 403, not 404, for an absent
+key when list permission is missing. A real QA fixture with normal service permissions failed
+closed; temporary operator credentials then passed six restore/retry/expiry checks. Both runs
+cleaned their fixtures. No new identity was deployed and no production settings changed.
+
+Real S3 and PostgreSQL orchestration are tested separately (the SQL integration substitutes S3).
+This is not yet a combined real S3+PostgreSQL disaster recovery demonstration or a deployed runner.
 
 Before activation: integrate bounded pending-work enumeration, ledger purge/retention and
-orphan reconciliation, separate least-privilege operator credentials, the S3 restore runner,
+orphan reconciliation, separate least-privilege operator credentials, combined S3+SQL E2E,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.

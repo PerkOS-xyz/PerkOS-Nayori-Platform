@@ -33,6 +33,17 @@ export function createEvidenceBackupLedger(pool: Pool, contracts: readonly strin
     finally { db.release(); }
   }
   return {
+    async loadRecovery(id: string) {
+      return transaction(id, async (db, row) => {
+        const saved = (await db.query("SELECT * FROM private_evidence_backups WHERE evidence_id=$1 FOR UPDATE", [id])).rows[0];
+        if (!saved || saved.state !== "verified") throw Error("backup_not_verified");
+        const manifest = validateEvidenceBackupManifest(saved.manifest);
+        const expected = saved.expected as EvidenceBackupSource;
+        if (!same(manifest, expected) || !same({ ...snapshot(row), sourceVersion: expected.sourceVersion }, expected) ||
+            row.version_id !== (saved.restored_version ?? expected.sourceVersion)) throw Error("backup_snapshot_changed");
+        return { manifest, expected };
+      });
+    },
     async reserve(id: string): Promise<EvidenceBackupSource> {
       return transaction(id, async (db, row, time) => {
         const expected = snapshot(row);
