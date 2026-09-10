@@ -1,7 +1,29 @@
 # QA backup operator
 
-Status: one-shot CLI implemented; **not deployed or scheduled**. Private uploads remain disabled.
+Status (2026-09-10): deployed and scheduled in QA using release
+`bb260b10230a29ca28995c987cfc7726b31e6dc0`. **Private uploads remain disabled.**
 This command is never imported by the API and does not restore files automatically.
+
+The QA timer runs reconciliation followed by retention every five minutes, batch size one.
+Its one-shot containers mount only the source reader and the required backup role. The database
+network stays internal; a separate operator egress network provides HTTPS access to S3.
+Production has not been activated by this QA rollout.
+
+## Verified QA operations
+
+- Migrations 009/010 applied after a protected database backup.
+- Metadata backups include both `private_evidence_objects` and `private_evidence_backups`.
+- A real timer invocation copied a synthetic file, verified its exact bytes/hash and persisted
+  a verified ledger entry with exactly one backup version.
+- A two-table dump containing that fixture was restored into isolated PostgreSQL; the restored
+  object and ledger hash matched. This is a table-level recovery test, not a full VPS disaster drill.
+- Synthetic S3 versions and source/ledger rows were removed after verification; the temporary
+  restore database and network were removed. Internal fixtures are not external adoption.
+- Existing QA watchdog/Resend integration monitors operator failure, inactivity and stale runs.
+  A monitor on the same VPS does not detect complete loss of that VPS independently.
+
+End-to-end private upload/authorization integration remains a separate gate. These checks do not
+claim that private uploads are enabled or that mainnet has this operational configuration.
 
 After building, run `npm run evidence:backup:qa` with an external protected environment file.
 Never paste credentials in command arguments, logs, repository files or support tickets.
@@ -55,7 +77,7 @@ operator work; pagination must be added and verified before scaling beyond this 
 | 2 | Inconsistency/quarantine/truncation or failed reconciliation items; operator attention |
 | 3 | Another batch holds the advisory lock; no overlapping work started |
 
-The future scheduler must alert on nonzero exits and missed runs. Run status, dry-run, then a
+The scheduler must alert on nonzero exits and missed runs. Run status, dry-run, then a
 single explicitly confirmed QA fixture batch before scheduling. Verify partial-write recovery,
 retention and monitoring end-to-end. Never delete a ledger row to silence an alert: verify S3
 absence and original binding first. No production deployment or automatic repair is authorized
