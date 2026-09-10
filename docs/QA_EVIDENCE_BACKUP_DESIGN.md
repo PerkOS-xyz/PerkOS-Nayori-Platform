@@ -99,3 +99,7 @@ Expired source rows are left for retention, and quarantined entries still need o
 Before activation: operator handling of quarantined/corrupt records, separate least-privilege operator credentials,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.
+
+The [one-shot QA operator](QA_BACKUP_OPERATOR.md) now exposes status/reconcile/retire with
+explicit confirmation, bounded diagnostics and nonzero attention/failure outcomes. It is not
+deployed or scheduled; IAM provisioning and live operator tests remain activation gates.
