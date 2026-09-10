@@ -1,6 +1,6 @@
 # QA private evidence backup gates
 
-Status: policy and S3 copy/purge adapter tested; private uploads remain disabled.
+Status: policy, S3 adapter and operator ledger implemented; private uploads remain disabled.
 
 Use an independent private bucket, not a second version in the primary bucket. Application
 and primary cleanup identities must have no access to the backup. Separate-bucket isolation
@@ -38,7 +38,17 @@ early purge rejection, due purge and empty retry. Deadline advancement used an i
 only for synthetic data; this does not prove wall-clock retention enforcement. Fixtures were
 removed. The experiment used temporary operator access on the Mac, not deployed backup keys.
 
-Before activation: integrate a durable manifest ledger and
-orphan reconciliation, separate least-privilege operator credentials, SQL restore transactions,
+Migration 009 adds a metadata-only operator ledger. Reserve commits a pending snapshot before
+copying; verification binds the manifest and bytes to the locked source row. The ledger survives
+source deletion, so cleanup cannot silently discard an unresolved backup. No payloads are stored.
+
+`commitRestore` is the SQL half of recovery: after a caller writes and reads back the exact new
+S3 version, it atomically changes the source mapping and records that version. Same-version retry
+is idempotent; competing restores, tombstones and expiration are rejected. An ambiguous SQL
+commit must be reconciled by retrying the SAME version, never by deleting it blindly.
+The S3 restore writer/readback and cross-system orphan reconciliation are still not implemented.
+
+Before activation: integrate bounded pending-work enumeration, ledger purge/retention and
+orphan reconciliation, separate least-privilege operator credentials, the S3 restore runner,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.

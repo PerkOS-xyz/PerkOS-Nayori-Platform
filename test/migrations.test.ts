@@ -19,6 +19,7 @@ describe("facilitator migrations", () => {
       "006_private_evidence.sql",
       "007_private_evidence_objects.sql",
       "008_private_evidence_purge.sql",
+      "009_private_evidence_backups.sql",
     ]);
     expect(migrations[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
