@@ -129,6 +129,25 @@ downloaded, and expired restored metadata denied access. The synthetic object ve
 containers were removed afterward. This validates metadata recovery while the object remains in
 S3, **not recovery from bucket loss**. Versioning is not an independent backup. Production was unchanged.
 
+## QA operational email alerts
+
+The QA watchdog checks timer/service failures, staleness and missing/unsafe metadata backups.
+It now sends through Resend, not SNS, using a separate sending-only domain-scoped credential.
+QA subjects always start with `[QA]`; development and production must use their own configuration
+and `[Dev]` / `[Prod]` labels. No object contents, credentials or raw exceptions appear in emails.
+
+The notifier persists a pending request before sending and reuses its idempotency key when
+retrying. Unchanged conditions are suppressed, changed failure notices are rate-limited and a
+recovery transition may notify. Ambiguous requests older than23hours require operator review;
+provider idempotency is not an indefinite exactly-once guarantee. State loss also requires review.
+Local notifier failures remain visible as systemd failures; a broken email path cannot reliably
+report its own failure through that same path.
+
+Nine policy checks passed locally and on the VPS. A VPS-generated test email was confirmed
+delivered by Resend; repeating the test produced no duplicate. Healthy baseline checks sent no
+email. These checks do not yet inject a live operational failure/recovery cycle. Independent
+host-loss monitoring, email-path monitoring and replay-cost alerts remain outstanding.
+
 ## Remaining activation gates
 
 1. Preserve verified QA bucket settings: Block Public Access, bucket-owner-enforced ownership/no
@@ -136,7 +155,7 @@ S3, **not recovery from bucket loss**. Versioning is not an independent backup. 
 2. Mount the provisioned restricted service credential into the QA runtime securely; never root.
    Do not transfer operator cleanup permissions to the HTTP service or agents.
 3. Exact QA origin CORS for browser POST; agents do not require CORS. Do not use wildcard origins.
-4. Add failure/replay-cost alerting and validate independent object-loss recovery and retention
+4. Add independent outage/email-path and replay-cost alerting; validate object-loss recovery and retention
    across any additional backups. Never purge rows first.
 5. Migrations007/008 are applied in QA. Opt in only after the remaining gates pass, with issuer evidence identity
    enabled and explicit grants. Do not enable the old write/read factory alongside the new backend.

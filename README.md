@@ -12,7 +12,9 @@ identity passes22real AWS checks. The server now supports explicit QA-only opt-i
 credential files,30day access retention and a separate exact-version cleanup CLI. **Deployed app
 endpoints remain disabled**. QA deployment and migrations are complete; separate scheduled cleanup
 and metadata backups are operating. Synthetic metadata restoration verified the pinned S3 version,
-exact bytes and expiry enforcement. SDK/MCP/evaluator integration, alerting and bucket-loss recovery remain.
+exact bytes and expiry enforcement. QA operational email alerts now use Resend with a dedicated
+sending-only key, persistent duplicate suppression and a delivered VPS integration test.
+SDK/MCP/evaluator integration, independent outage/cost monitoring and bucket-loss recovery remain.
 
 QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
 authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
