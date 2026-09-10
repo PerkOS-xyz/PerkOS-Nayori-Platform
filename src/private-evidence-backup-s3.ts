@@ -61,6 +61,15 @@ export function createS3EvidenceBackup(options: { sourceBucket: string; backupBu
   const list = (key: string) => backup.send(new ListObjectVersionsCommand({ Bucket: options.backupBucket,
     Prefix: key, MaxKeys: 1000, ...owner }), signal());
   return {
+    /** Internal operator readback, never an HTTP download endpoint. */
+    async readBackup(input: unknown): Promise<Uint8Array> {
+      const m = validateEvidenceBackupManifest(input);
+      if (evidenceBackupPhase(m, now()) !== "restorable") throw Error("evidence_recovery_denied");
+      const r = await read(backup, options.backupBucket, m.backupKey, m.backupVersion);
+      if (JSON.stringify(decode(r)) !== JSON.stringify(m)) throw Error("backup_manifest_changed");
+      verifyEvidenceRecovery(m, r.bytes, m, now());
+      return r.bytes;
+    },
     /** Restore only an absent primary object. A tagged, verified prior restore can be resumed
      * after an ambiguous S3/SQL result. Do not automatically delete it when SQL commit fails.
      * Caller must load trusted ledger metadata, then commit the returned exact-version readback.

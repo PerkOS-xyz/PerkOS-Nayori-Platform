@@ -84,7 +84,18 @@ deadline. The S3 adapter validates all versions and absence before SQL removes a
 rolls SQL back, retaining the intent for retry; a prior partial S3 deletion can safely resume with
 an empty inventory. A conflicting manifest stops cleanup. This does not restore expired access.
 
-Before activation: integrate unexpired pending-work enumeration/reconciliation,
-operator handling of quarantined/corrupt records, separate least-privilege operator credentials,
+Unexpired reconciliation is now an operator-only module: at most ten sequential candidates,
+dry-run by default, with a PostgreSQL session advisory lock preventing overlapping batches in
+the same schema. It selects finalized, unexpired, non-purged sources in the configured testnet
+contracts, excluding already-verified work. Reserve commits before copy; exact-version backup
+readback precedes SQL verification. Failed copies remain pending, and their attempt timestamp
+is moved back in the queue without changing expiration. Counts contain no payloads or raw errors.
+The scheduler must treat a nonzero `failed` count as actionable, not as a healthy run.
+
+The operator pool must allow at least two connections: one holds the batch lock and another
+performs short ledger transactions. Connections with uncertain advisory lock state are discarded.
+Expired source rows are left for retention, and quarantined entries still need operator review.
+
+Before activation: operator handling of quarantined/corrupt records, separate least-privilege operator credentials,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.
