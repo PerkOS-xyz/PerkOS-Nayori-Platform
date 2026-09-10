@@ -10,7 +10,9 @@ short-lived direct upload, verifies S3 checksum/size/version, and stores metadat
 Downloads are authorized per job and pinned to the verified S3 version. A restricted QA service
 identity passes22real AWS checks. The server now supports explicit QA-only opt-in, owner-only
 credential files,30day access retention and a separate exact-version cleanup CLI. **Deployed app
-endpoints remain disabled**; deployment, scheduled cleanup/backups and SDK/MCP/evaluator integration remain.
+endpoints remain disabled**. QA deployment and migrations are complete; separate scheduled cleanup
+and metadata backups are operating. Synthetic metadata restoration verified the pinned S3 version,
+exact bytes and expiry enforcement. SDK/MCP/evaluator integration, alerting and bucket-loss recovery remain.
 
 QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
 authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
