@@ -145,8 +145,16 @@ report its own failure through that same path.
 
 Nine policy checks passed locally and on the VPS. A VPS-generated test email was confirmed
 delivered by Resend; repeating the test produced no duplicate. Healthy baseline checks sent no
-email. These checks do not yet inject a live operational failure/recovery cycle. Independent
-host-loss monitoring, email-path monitoring and replay-cost alerts remain outstanding.
+email. A subsequent controlled QA cycle stopped the backup timer, delivered one failure email,
+suppressed its duplicate, restored the timer, delivered a recovery email and suppressed a healthy
+repeat. Both emails were confirmed delivered by Resend and the timers were restored.
+
+That exercise exposed and corrected a watchdog race: systemd clears the completion timestamp
+while a service starts. The checker now reads a service snapshot with monotonic timestamps and
+allows an in-progress execution only within its bounded runtime. Twelve watchdog policy checks,
+nine notification policy checks and five operational cycle assertions pass. The exercise uses
+separate notification state and clearly labeled test subjects; it does not rewrite live dedup state.
+Independent host-loss monitoring, email-path monitoring and replay-cost alerts remain outstanding.
 
 ## Remaining activation gates
 
