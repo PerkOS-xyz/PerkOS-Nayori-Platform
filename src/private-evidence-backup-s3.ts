@@ -13,6 +13,10 @@ type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken?
  */
 export function createS3EvidenceBackup(options: { sourceBucket: string; backupBucket: string;
   accountId: string; region: string; sourceCredentials: Credentials; backupCredentials: Credentials;
+  /** Dedicated operator: primary Get/GetVersion, conditional Put, scoped ListBucket for absence
+   * detection. Never reuse or broaden the application identity. No primary delete permission.
+   */
+  restoreCredentials?: Credentials;
   now?: () => number }) {
   const bucket = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
   if (!bucket.test(options.sourceBucket) || !bucket.test(options.backupBucket) ||
@@ -22,6 +26,8 @@ export function createS3EvidenceBackup(options: { sourceBucket: string; backupBu
     requestHandler: { connectionTimeout: 2000, requestTimeout: 5000 } };
   const source = new S3Client({ ...config, credentials: { ...options.sourceCredentials } });
   const backup = new S3Client({ ...config, credentials: { ...options.backupCredentials } });
+  // Never give the normal backup reader write access to the primary bucket.
+  const restorer = options.restoreCredentials ? new S3Client({ ...config, credentials: { ...options.restoreCredentials } }) : null;
   const now = options.now ?? Date.now;
   const owner = { ExpectedBucketOwner: options.accountId };
   const signal = () => ({ abortSignal: AbortSignal.timeout(5000) });
@@ -55,6 +61,40 @@ export function createS3EvidenceBackup(options: { sourceBucket: string; backupBu
   const list = (key: string) => backup.send(new ListObjectVersionsCommand({ Bucket: options.backupBucket,
     Prefix: key, MaxKeys: 1000, ...owner }), signal());
   return {
+    /** Restore only an absent primary object. A tagged, verified prior restore can be resumed
+     * after an ambiguous S3/SQL result. Do not automatically delete it when SQL commit fails.
+     * Caller must load trusted ledger metadata, then commit the returned exact-version readback.
+     */
+    async restore(input: unknown, expected: EvidenceBackupSource): Promise<{ versionId: string; bytes: Uint8Array }> {
+      if (!restorer) throw Error("evidence_restore_disabled");
+      const m = validateEvidenceBackupManifest(input);
+      if (evidenceBackupPhase(m, now()) !== "restorable") throw Error("evidence_recovery_denied");
+      const copy = await read(backup, options.backupBucket, m.backupKey, m.backupVersion);
+      const stored = decode(copy);
+      if (JSON.stringify(stored) !== JSON.stringify(m)) throw Error("backup_manifest_changed");
+      verifyEvidenceRecovery(m, copy.bytes, expected, now());
+      const tags = { "restore-backup-version": m.backupVersion, "restore-source-version": m.sourceVersion,
+        "restore-expiry": String(m.expiresAt) };
+      const verifyRestored = async () => {
+        const current = await read(restorer, options.sourceBucket, m.sourceKey);
+        const versionId = current.response.VersionId!;
+        // Pin the readback to the returned version even if another writer changes latest.
+        const exact = await read(restorer, options.sourceBucket, m.sourceKey, versionId);
+        if (versionId === m.sourceVersion || exact.response.ContentType !== m.mediaType ||
+            Object.entries(tags).some(([key, value]) => exact.response.Metadata?.[key] !== value)) throw Error("restore_existing_object_conflict");
+        verifyEvidenceRecovery(m, exact.bytes, expected, now());
+        return { versionId, bytes: exact.bytes };
+      };
+      try { return await verifyRestored(); } catch (e) { if (!missing(e)) throw e; }
+      // Recheck expiry after all reads and immediately before the write.
+      verifyEvidenceRecovery(m, copy.bytes, expected, now());
+      try {
+        await restorer.send(new PutObjectCommand({ Bucket: options.sourceBucket, Key: m.sourceKey,
+          Body: copy.bytes, ContentType: m.mediaType, ServerSideEncryption: "AES256", IfNoneMatch: "*",
+          ChecksumSHA256: Buffer.from(m.sha256, "hex").toString("base64"), Metadata: tags, ...owner }), signal());
+      } catch (e) { if (!conflict(e)) throw e; }
+      return verifyRestored();
+    },
     async copy(expected: EvidenceBackupSource): Promise<EvidenceBackupManifest> {
       const draft = validateEvidenceBackupManifest({ ...expected, schemaVersion: 1, network: "testnet",
         backupKey: expected.sourceKey.replace("private-evidence/", "private-evidence-backup/"),
@@ -99,6 +139,6 @@ export function createS3EvidenceBackup(options: { sourceBucket: string; backupBu
       if (remaining.IsTruncated || remaining.Versions?.length || remaining.DeleteMarkers?.length) throw Error("backup_purge_incomplete");
       return versions.length;
     },
-    close() { source.destroy(); backup.destroy(); },
+    close() { source.destroy(); backup.destroy(); restorer?.destroy(); },
   };
 }

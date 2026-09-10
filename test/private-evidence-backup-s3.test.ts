@@ -23,6 +23,9 @@ const options = { sourceBucket: "fixture-qa-primary", backupBucket: "fixture-qa-
   sourceCredentials: { accessKeyId: "fixture-source", secretAccessKey: "fixture" },
   backupCredentials: { accessKeyId: "fixture-backup", secretAccessKey: "fixture" } };
 const adapter = (time = 1001) => createS3EvidenceBackup({ ...options, now: () => time });
+const restorer = () => createS3EvidenceBackup({ ...options, restoreCredentials: options.sourceCredentials, now: () => 1001 });
+const restored = () => ({ ...response("restored"), Metadata: { "restore-backup-version": m.backupVersion,
+  "restore-source-version": m.sourceVersion, "restore-expiry": String(m.expiresAt) } });
 beforeEach(() => mock.send.mockReset());
 it("copies exact source version with conditional creation then verifies stored bytes", async () => {
   mock.send.mockRejectedValueOnce(denied(404)).mockResolvedValueOnce(response("original"))
@@ -105,4 +108,35 @@ it("requires empty post-deletion inventory", async () => {
 it("rejects same bucket and alternate regions", () => {
   expect(() => createS3EvidenceBackup({ ...options, backupBucket: options.sourceBucket })).toThrow();
   expect(() => createS3EvidenceBackup({ ...options, region: "other" })).toThrow();
+});
+it("restores an absent primary and returns exact-version readback", async () => {
+  mock.send.mockResolvedValueOnce(response()).mockRejectedValueOnce(denied(404))
+    .mockResolvedValueOnce({ VersionId: "restored" }).mockResolvedValueOnce(restored()).mockResolvedValueOnce(restored());
+  const r = await restorer().restore(m, expected);
+  expect(r.versionId).toBe("restored"); expect(Buffer.from(r.bytes)).toEqual(bytes);
+  expect(mock.send.mock.calls[2]![0].input).toMatchObject({ IfNoneMatch: "*", Bucket: options.sourceBucket });
+  expect(mock.send.mock.calls[4]![0].input).toMatchObject({ VersionId: "restored" });
+});
+it("recognizes a prior restore without another PUT", async () => {
+  mock.send.mockResolvedValueOnce(response()).mockResolvedValueOnce(restored()).mockResolvedValueOnce(restored());
+  expect((await restorer().restore(m, expected)).versionId).toBe("restored");
+  expect(mock.send.mock.calls.some(c => c[0].kind === "put")).toBe(false);
+});
+it("does not overwrite existing untagged primary", async () => {
+  mock.send.mockResolvedValueOnce(response()).mockResolvedValueOnce(response("existing")).mockResolvedValueOnce(response("existing"));
+  await expect(restorer().restore(m, expected)).rejects.toThrow("restore_existing_object_conflict");
+  expect(mock.send.mock.calls.some(c => c[0].kind === "put")).toBe(false);
+});
+it("requires explicit restore identity", async () => {
+  await expect(adapter().restore(m, expected)).rejects.toThrow("evidence_restore_disabled");
+  expect(mock.send).not.toHaveBeenCalled();
+});
+it("does not blindly retry or delete after ambiguous restore write", async () => {
+  mock.send.mockResolvedValueOnce(response()).mockRejectedValueOnce(denied(404)).mockRejectedValueOnce(Error("timeout"));
+  await expect(restorer().restore(m, expected)).rejects.toThrow("timeout");
+  expect(mock.send).toHaveBeenCalledTimes(3);
+});
+it("rejects altered backup manifest before primary writes", async () => {
+  mock.send.mockResolvedValueOnce(response("copy", { ...m, capturedAt: 999 }));
+  await expect(restorer().restore(m, expected)).rejects.toThrow(); expect(mock.send).toHaveBeenCalledTimes(1);
 });

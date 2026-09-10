@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { createEvidenceBackupLedger } from "../src/private-evidence-backup-ledger.js";
+import { recoverPrivateEvidence } from "../src/private-evidence-recover.js";
 
 describe.skipIf(process.env.DATABASE_INTEGRATION !== "true")("backup ledger PostgreSQL", () => {
   it("durably reserves, verifies, atomically restores and rejects unsafe retries", async () => {
@@ -32,11 +33,14 @@ describe.skipIf(process.env.DATABASE_INTEGRATION !== "true")("backup ledger Post
       expect((await pool.query("SELECT state FROM private_evidence_backups")).rows[0].state).toBe("pending");
       await ledger.verify(id, manifest, bytes);
       await ledger.verify(id, manifest, bytes);
+      expect((await ledger.loadRecovery(id)).manifest).toEqual(manifest);
       await expect(ledger.verify(id, { ...manifest, backupVersion: "other" }, bytes)).rejects.toThrow();
       await expect(ledger.commitRestore(id, "original", bytes)).rejects.toThrow();
       await expect(ledger.commitRestore(id, "new", Buffer.from("tamper!"))).rejects.toThrow();
       // Concurrent retry of the same verified readback must not produce competing mappings.
-      await Promise.all([ledger.commitRestore(id, "new", bytes), ledger.commitRestore(id, "new", bytes)]);
+      const fakeS3 = { restore: async () => ({ versionId: "new", bytes }) };
+      await Promise.all([recoverPrivateEvidence(id, ledger, fakeS3), recoverPrivateEvidence(id, ledger, fakeS3)]);
+      expect((await recoverPrivateEvidence(id, ledger, fakeS3)).versionId).toBe("new");
       const row = (await pool.query("SELECT version_id,expires_at FROM private_evidence_objects WHERE id=$1", [id])).rows[0];
       expect(row.version_id).toBe("new"); expect(new Date(row.expires_at).getTime()).toBe(expiry);
       await expect(ledger.commitRestore(id, "different-new", bytes)).rejects.toThrow();
