@@ -6,7 +6,7 @@ No new contracts are required. This replaces the planned PostgreSQL ciphertext p
 production uploads. The older encrypted store remains unmounted; do not enable both backends.
 
 Independent backup and recovery gates are tracked in
-[QA evidence backup design](QA_EVIDENCE_BACKUP_DESIGN.md). The tested policy foundation does
+[QA evidence backup design](QA_EVIDENCE_BACKUP_DESIGN.md). The tested policy and S3 adapter do
 not yet schedule object copies or implement transactional SQL restoration; uploads remain off.
 
 ## Protocol
