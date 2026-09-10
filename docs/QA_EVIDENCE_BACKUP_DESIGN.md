@@ -73,7 +73,18 @@ Both synthetic S3 keys were purged and verified absent; the disposable database,
 tunnel were removed. This proves the exercised operator recovery path, not whole-account loss,
 database-loss recovery, missed schedules or a deployed autonomous backup service.
 
-Before activation: integrate bounded pending-work enumeration, ledger purge/retention and
-orphan reconciliation, separate least-privilege operator credentials,
+Migration 010 preserves the source contract on each backup intent. Historical entries whose
+source is already missing cannot be safely scoped and remain quarantined (NULL contract) for
+operator review. They are never purged just because they are old.
+
+The operator retention module processes at most ten due intents, dry-run by default, with row
+locks and explicit testnet contract scope. It includes expired pending intents: a PUT might have
+succeeded before SQL verification. Their original snapshot determines the exact backup key and
+deadline. The S3 adapter validates all versions and absence before SQL removes an intent. Failure
+rolls SQL back, retaining the intent for retry; a prior partial S3 deletion can safely resume with
+an empty inventory. A conflicting manifest stops cleanup. This does not restore expired access.
+
+Before activation: integrate unexpired pending-work enumeration/reconciliation,
+operator handling of quarantined/corrupt records, separate least-privilege operator credentials,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.

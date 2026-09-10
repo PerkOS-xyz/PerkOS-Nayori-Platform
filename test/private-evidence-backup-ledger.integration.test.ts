@@ -14,7 +14,7 @@ describe.skipIf(process.env.DATABASE_INTEGRATION !== "true")("backup ledger Post
       await admin.query(`CREATE SCHEMA ${schema}`);
       pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 4,
         query_timeout: 10000, options: `-c search_path=${schema}` });
-      for (const file of ["007_private_evidence_objects.sql", "008_private_evidence_purge.sql", "009_private_evidence_backups.sql"])
+      for (const file of ["007_private_evidence_objects.sql", "008_private_evidence_purge.sql", "009_private_evidence_backups.sql", "010_private_evidence_backup_scope.sql"])
         await pool.query(await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
       const contract = "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.sbtc-commerce-v5";
       const ledger = createEvidenceBackupLedger(pool, [contract]);
