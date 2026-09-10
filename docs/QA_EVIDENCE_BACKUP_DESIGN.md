@@ -61,10 +61,19 @@ key when list permission is missing. A real QA fixture with normal service permi
 closed; temporary operator credentials then passed six restore/retry/expiry checks. Both runs
 cleaned their fixtures. No new identity was deployed and no production settings changed.
 
-Real S3 and PostgreSQL orchestration are tested separately (the SQL integration substitutes S3).
-This is not yet a combined real S3+PostgreSQL disaster recovery demonstration or a deployed runner.
+On 2026-09-10, the merged implementation also passed an 11-check combined real S3 + PostgreSQL
+QA exercise. PostgreSQL ran in an isolated disposable container, reached through an SSH tunnel;
+AWS credentials remained on the operator workstation. The test persisted intent, copied and
+verified the backup, refused to overwrite the existing primary, then permanently removed only
+the synthetic original version. It restored bytes and committed the SQL mapping/receipt while
+preserving expiration. Losing the response after a real SQL commit was injected; retry reused
+the same S3 version with no duplicate. The final bytes matched and an expired SQL row was denied.
+
+Both synthetic S3 keys were purged and verified absent; the disposable database, network and
+tunnel were removed. This proves the exercised operator recovery path, not whole-account loss,
+database-loss recovery, missed schedules or a deployed autonomous backup service.
 
 Before activation: integrate bounded pending-work enumeration, ledger purge/retention and
-orphan reconciliation, separate least-privilege operator credentials, combined S3+SQL E2E,
+orphan reconciliation, separate least-privilege operator credentials,
 and scheduled execution with independent monitoring. Test missed schedules and expiration
 during recovery. Complete OAuth/SDK/MCP/evaluator integration. No production changes here.
