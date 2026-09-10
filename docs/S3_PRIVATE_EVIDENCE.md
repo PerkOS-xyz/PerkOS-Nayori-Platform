@@ -108,19 +108,37 @@ S3 failure rolls SQL back; retries safely remove remaining versions. Active rows
 are untouched. Truncated listings, more than100versions, wrong prefixes and unversioned objects
 fail closed for operator review. Tombstones cease counting toward capacity; metadata pruning waits
 until original access expiry plus7days. A restored backup must reapply expiry/cleanup before access.
-SQL deletion is not physical erasure of WAL/backups. No cleanup schedule or backup copy is installed
-by the code change; those deployment checks remain mandatory. No public maintenance API exists.
+SQL deletion is not physical erasure of WAL/backups. No public maintenance API exists.
+
+## QA operations verified
+
+The approved release is deployed in QA with migrations007/008; application uploads remain disabled.
+A separate operator timer runs a bounded batch of at most10 eligible rows every five minutes.
+Its IAM identity can list the QA prefix and delete exact versions, but cannot read or upload objects.
+Eight real AWS checks verified its permissions and idempotent cleanup using synthetic versions.
+The API does not receive this cleanup credential.
+
+A dedicated daily metadata-only PostgreSQL backup runs with an hourly retention check. Its own
+daily copies older than six days are removed, leaving margin below the approved seven-day backup
+cap during normal operation. Timer failure/downtime requires operator intervention; this is not
+an unconditional deletion guarantee. Unrelated/historical backups are not purged by this job.
+
+Four synthetic recovery checks passed after destroying the fixture source database and restoring
+its dump into a new database: metadata restored, exact S3 version preserved, original bytes
+downloaded, and expired restored metadata denied access. The synthetic object version and fixture
+containers were removed afterward. This validates metadata recovery while the object remains in
+S3, **not recovery from bucket loss**. Versioning is not an independent backup. Production was unchanged.
 
 ## Remaining activation gates
 
 1. Preserve verified QA bucket settings: Block Public Access, bucket-owner-enforced ownership/no
    ACLs, versioning Enabled, SSE-S3 and TLS-only policy. Production needs a separate bucket.
-2. Provision the tested restricted service credential to the QA runtime securely; never root.
+2. Mount the provisioned restricted service credential into the QA runtime securely; never root.
    Do not transfer operator cleanup permissions to the HTTP service or agents.
 3. Exact QA origin CORS for browser POST; agents do not require CORS. Do not use wildcard origins.
-4. Schedule/monitor the approved retention cleanup and backup cap, add replay-cost alarms and test
-   recovery covering object versions **and** metadata. Never purge rows first.
-5. Apply migrations007/008 and opt in only after these gates pass, with issuer evidence identity
+4. Add failure/replay-cost alerting and validate independent object-loss recovery and retention
+   across any additional backups. Never purge rows first.
+5. Migrations007/008 are applied in QA. Opt in only after the remaining gates pass, with issuer evidence identity
    enabled and explicit grants. Do not enable the old write/read factory alongside the new backend.
 6. SDK/MCP helpers, evaluator private reads, public-output leak checks, browser workflow and full QA E2E.
 
