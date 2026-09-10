@@ -5,6 +5,10 @@ PostgreSQL stores only job binding, hash, size, expiry and exact S3 object/versi
 No new contracts are required. This replaces the planned PostgreSQL ciphertext path, not live
 production uploads. The older encrypted store remains unmounted; do not enable both backends.
 
+Independent backup and recovery gates are tracked in
+[QA evidence backup design](QA_EVIDENCE_BACKUP_DESIGN.md). The tested policy foundation does
+not yet schedule object copies or implement transactional SQL restoration; uploads remain off.
+
 ## Protocol
 
 All API calls require a wallet-bound OAuth token with the applicable `evidence:write` or
