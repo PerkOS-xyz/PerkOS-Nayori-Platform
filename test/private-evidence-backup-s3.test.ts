@@ -131,6 +131,15 @@ it("requires explicit restore identity", async () => {
   await expect(adapter().restore(m, expected)).rejects.toThrow("evidence_restore_disabled");
   expect(mock.send).not.toHaveBeenCalled();
 });
+it("reads the exact backup version for ledger verification", async () => {
+  mock.send.mockResolvedValueOnce(response());
+  expect(Buffer.from(await adapter().readBackup(m))).toEqual(bytes);
+  expect(mock.send.mock.calls[0]![0].input).toMatchObject({ VersionId: "copy", Key: m.backupKey });
+});
+it("rejects expired operator readback before network access", async () => {
+  await expect(adapter(m.expiresAt).readBackup(m)).rejects.toThrow();
+  expect(mock.send).not.toHaveBeenCalled();
+});
 it("does not blindly retry or delete after ambiguous restore write", async () => {
   mock.send.mockResolvedValueOnce(response()).mockRejectedValueOnce(denied(404)).mockRejectedValueOnce(Error("timeout"));
   await expect(restorer().restore(m, expected)).rejects.toThrow("timeout");
