@@ -51,9 +51,9 @@ export function createEvidenceBackupLedger(pool: Pool, contracts: readonly strin
         validateEvidenceBackupManifest({ ...expected, schemaVersion: 1, network: "testnet",
           backupKey: expected.sourceKey.replace("private-evidence/", "private-evidence-backup/"),
           backupVersion: "pending", capturedAt: time, deleteAt: expected.expiresAt + EVIDENCE_BACKUP_GRACE_SECONDS * 1000 });
-        await db.query("INSERT INTO private_evidence_backups (evidence_id,expected) VALUES ($1,$2) ON CONFLICT DO NOTHING", [id, expected]);
+        await db.query("INSERT INTO private_evidence_backups (evidence_id,expected,contract) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", [id, expected, row.contract]);
         const saved = (await db.query("SELECT * FROM private_evidence_backups WHERE evidence_id=$1 FOR UPDATE", [id])).rows[0];
-        if (saved.state === "purged" || !same(saved.expected, expected)) throw Error("backup_snapshot_changed");
+        if (saved.state === "purged" || saved.contract !== row.contract || !same(saved.expected, expected)) throw Error("backup_snapshot_changed");
         return expected;
       });
     },
