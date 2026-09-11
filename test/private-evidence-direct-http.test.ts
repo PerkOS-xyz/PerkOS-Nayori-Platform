@@ -22,18 +22,48 @@ async function fixture(wallet = provider) {
     objects: { upload, verify: async key => ({ key, versionId: "v1", checksum: Buffer.from(context.sha256, "hex").toString("base64"), size: 5, mediaType: "text/plain" }),
       download: async () => "https://fixture.s3.us-east-1.amazonaws.com/file?signature=fixture" } });
   let active = true;
+  let issuerStatus = 200;
+  let issuerCalls = 0;
+  let busyOnCall = 0;
   const app = createDirectEvidenceHttp({ network: "testnet", allowedContracts: [context.contract], issuer, audience,
     keys: createLocalJWKSet({ keys: [{ ...pub, kid: "fixture" }] }), isMerchantActive: async () => active,
     readJob: async () => ({ network: "testnet", contract: context.contract, jobId: "1", client: consumer,
       provider, evaluator, status: 1, escrow: 1000n }), service,
-    issuerFetcher: async (_url, init) => new Response(JSON.stringify({ active: true, clientId, walletAddress: wallet,
+    issuerFetcher: async (_url, init) => {
+      issuerCalls++;
+      if (issuerStatus !== 200 || issuerCalls === busyOnCall) return new Response("SECRET ISSUER DETAIL", {status: issuerStatus !== 200 ? issuerStatus : 429, headers:{"retry-after":"60"}});
+      return new Response(JSON.stringify({ active: true, clientId, walletAddress: wallet,
       merchantId: "tenant", scope: new Headers(init?.headers).get("x-nayori-evidence-scope"), expiresAt: Math.floor(Date.now()/1000)+600 }),
-    { headers: { "content-type": "application/json" } }) });
+    { headers: { "content-type": "application/json" } }); } });
   const request = (op: string, body: unknown, headers: Record<string, string> = {}) => app.request(`/v1/private-evidence/${op}`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
-  return { app, request, upload, rows, revoke: () => { active = false; } };
+  return { app, request, upload, rows, revoke: () => { active = false; }, setIssuer: (status:number) => {issuerStatus=status;}, busyAt: (call:number) => {issuerCalls=0;busyOnCall=call;} };
 }
 describe("direct S3 HTTP with real JWT checks and fixture storage", () => {
+  it("returns bounded retry guidance without exposing data; rechecks revocation on retry", async () => {
+    const f=await fixture(); f.setIssuer(429);
+    const r=await f.request("prepare", {context});
+    expect(r.status).toBe(503);expect(r.headers.get("retry-after")).toBe("60");
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(await r.json()).toEqual({error:"private_evidence_temporarily_unavailable"});
+    expect(f.rows.size).toBe(0);expect(f.upload).not.toHaveBeenCalled();
+    f.setIssuer(200); f.revoke();
+    expect((await f.request("prepare",{context})).status).toBe(403);
+  });
+  it("does not classify an invalid credential as retryable under issuer load", async () => {
+    const f=await fixture(); f.setIssuer(429);
+    const r=await f.request("prepare",{context},{authorization:"Bearer invalid.token.value"});
+    expect(r.status).toBe(403); expect(r.headers.get("retry-after")).toBeNull();
+    expect(f.rows.size).toBe(0);
+  });
+  it("does not return a signed download URL if the final identity check is throttled", async () => {
+    const f=await fixture();const p=await f.request("prepare",{context});const {id}=await p.json() as {id:string};
+    expect((await f.request("complete",{id})).status).toBe(200);
+    f.busyAt(3);
+    const denied=await f.request("download",{id});expect(denied.status).toBe(503);
+    expect(await denied.json()).toEqual({error:"private_evidence_temporarily_unavailable"});
+    f.busyAt(0);expect((await f.request("download",{id})).status).toBe(200);
+  });
   it("runs prepare/complete/download with no cache", async () => {
     const f = await fixture(); const p = await f.request("prepare", { context });
     expect(p.status).toBe(201); const { id } = await p.json() as { id: string };

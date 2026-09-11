@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EvidenceIssuerBusy } from "./evidence-issuer-busy.js";
 import type { EvidenceIdentity, EvidenceScope } from "./private-evidence-security.js";
 
 const responseSchema = z.object({
@@ -45,6 +46,10 @@ export function createIssuerEvidenceIdentityCheck(options: {
       const response = await withinDeadline(fetcher(endpoint, { method: "POST", redirect: "error", cache: "no-store",
         credentials: "omit", signal: controller.signal,
         headers: { authorization: options.authorization, "x-nayori-evidence-scope": options.scope, accept: "application/json" } }), controller.signal);
+      if (!controller.signal.aborted && !response.redirected && response.status === 429) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new EvidenceIssuerBusy(response.headers.get("retry-after"));
+      }
       if (controller.signal.aborted || response.status !== 200 || response.redirected ||
           response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
         void response.body?.cancel().catch(() => undefined); return false;
@@ -68,7 +73,7 @@ export function createIssuerEvidenceIdentityCheck(options: {
           value.merchantId !== identity.merchantId || value.scope !== options.scope ||
           value.expiresAt <= Math.floor(now() / 1000) || value.expiresAt > Math.floor(now() / 1000) + 900) return false;
       return await withinDeadline(options.isMerchantActive(identity.merchantId), controller.signal) && !controller.signal.aborted;
-    } catch { return false; }
+    } catch (error) { if (error instanceof EvidenceIssuerBusy) throw error; return false; }
     finally { clearTimeout(timer); controller.abort(); }
   };
 }

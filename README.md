@@ -9,8 +9,8 @@ New candidate: [direct S3 private evidence](docs/S3_PRIVATE_EVIDENCE.md). Nayori
 short-lived direct upload, verifies S3 checksum/size/version, and stores metadata only in PostgreSQL.
 Downloads are authorized per job and pinned to the verified S3 version. A restricted QA service
 identity passes22real AWS checks. The server now supports explicit QA-only opt-in, owner-only
-credential files,30day access retention and a separate exact-version cleanup CLI. **Deployed app
-endpoints remain disabled**. QA deployment and migrations are complete; separate scheduled cleanup
+credential files,30day access retention and a separate exact-version cleanup CLI. **Private endpoints
+are enabled for controlled internal QA testing only**. QA deployment and migrations are complete; separate scheduled cleanup
 and metadata backups are operating. Synthetic metadata restoration verified the pinned S3 version,
 exact bytes and expiry enforcement. QA operational email alerts now use Resend with a dedicated
 sending-only key, persistent duplicate suppression and a delivered VPS integration test.
@@ -21,8 +21,10 @@ authentication, per-job role checks, authenticated encryption and an inactive Po
 adapter with atomic quotas, a fail-closed issuer identity client and an **unmounted private HTTP
 factory** for authenticated uploads/downloads, a network/tip-pinned chain reader and explicit
 PostgreSQL runtime assembly, operator file keyring and bounded rotation/expired-row maintenance.
-**Private uploads are not enabled**: server activation,
-storage lifecycle, issuer activation, MCP and evaluator privacy integration must pass their gates first.
+The older PostgreSQL byte-storage backend remains unmounted; direct S3 is the QA path.
+MCP and evaluator privacy integration still require their gates. See
+[private-evidence retry guidance](docs/S3_PRIVATE_EVIDENCE.md#temporary-issuer-saturation-and-retries)
+for temporary issuer backpressure; no production-readiness claim is made.
 
 A disposable PostgreSQL backup/restore rehearsal has passed, including13recovery checks for key
 availability, expiry, revocation, rotation and corruption. This does not activate uploads or establish

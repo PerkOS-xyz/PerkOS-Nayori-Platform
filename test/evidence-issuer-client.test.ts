@@ -39,9 +39,15 @@ describe("issuer evidence identity client (inactive runtime adapter)", () => {
     f.isMerchantActive.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     expect(await f.check(identity)).toBe(false);
   });
-  it.each([401, 403, 404, 429, 500, 302])("fails closed on status %s", async status => {
+  it.each([401, 403, 404, 500, 302])("fails closed on status %s", async status => {
     const f = fixture(); f.fetcher.mockResolvedValue(new Response("denied", { status }));
     expect(await f.check(identity)).toBe(false);
+  });
+  it.each([["30",30],[null,60],["0",60],["999",60],["tomorrow",60],["1",1],["300",300]])("bounds issuer retry-after %s", async (header, expected) => {
+    const f=fixture();
+    f.fetcher.mockResolvedValue(new Response("SECRET UPSTREAM BODY", {status:429, headers:header===null?{}:{"retry-after":String(header)}}));
+    await expect(f.check(identity)).rejects.toMatchObject({message:"private_evidence_temporarily_unavailable", retryAfterSeconds:expected});
+    expect(f.fetcher).toHaveBeenCalledTimes(1);
   });
   it.each(["oversized", "wrong-mime", "bad-json", "network", "invalid-utf8"])("denies %s", async fault => {
     const f = fixture();
