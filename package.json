@@ -12,6 +12,8 @@
     "db:migrate": "tsx src/migrate.ts",
     "db:migrate:production": "node dist/migrate.js",
     "dev": "tsx watch src/server.ts",
+    "evidence:cleanup:qa": "node dist/private-evidence-maintain.js",
+    "evidence:backup:qa": "node dist/private-evidence-backup-operator.js",
     "lint": "eslint .",
     "merchant:provision": "tsx src/provision-merchant.ts",
     "merchant:provision:production": "node dist/provision-merchant.js",
@@ -28,6 +30,9 @@
     "verify": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1129.0",
+    "@aws-sdk/s3-presigned-post": "3.1129.0",
+    "@aws-sdk/s3-request-presigner": "3.1129.0",
     "@hono/node-server": "2.1.1",
     "@perkos/agent-sdk": "0.7.1",
     "@stacks/encryption": "7.5.0",
