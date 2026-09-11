@@ -15,6 +15,45 @@ function fixture(overrides: Record<number, unknown> = {}) {
   return { fetcher, read: createPrivateEvidenceChain({ network: "testnet", origin: "https://api.testnet.hiro.so", allowedContracts: [contract], fetcher }) };
 }
 describe("bounded private-evidence chain adapter", () => {
+  function movingFixture(secondMoves = false, stall = false) {
+    const next = { ...info, stacks_tip: "c".repeat(64), stacks_tip_height: 101 };
+    const nextBlock = { ...block(), hash: `0x${next.stacks_tip}`, index_block_hash: `0x${"d".repeat(64)}`, height: 101 };
+    const responses = [info, block(), result(job()), result(uintCV(1000)), next,
+      next, nextBlock, result(job(false)), result(uintCV(0)), secondMoves ? { ...next, stacks_tip: "e".repeat(64) } : next];
+    let index = 0;
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      if (stall && index === 0) await new Promise(resolve => setTimeout(resolve, 4900));
+      if (stall && index === 5) return await new Promise<Response>(() => {});
+      return new Response(JSON.stringify(responses[index++]), { headers: { "content-type": "application/json" } });
+    });
+    return { fetcher, read: createPrivateEvidenceChain({ network: "testnet", origin: "https://api.testnet.hiro.so", allowedContracts: [contract], fetcher }) };
+  }
+  it("discards moved snapshot and returns only freshly pinned job and escrow", async () => {
+    const f = movingFixture();
+    expect(await f.read(contract, "1")).toMatchObject({ provider: null, escrow: 0n });
+    expect(f.fetcher).toHaveBeenCalledTimes(10);
+    for (const index of [7, 8]) expect(new URL(String(f.fetcher.mock.calls[index]![0])).searchParams.get("tip")).toBe(`0x${"d".repeat(64)}`);
+  });
+  it("fails closed after a second tip movement without a third attempt", async () => {
+    const f = movingFixture(true);
+    await expect(f.read(contract, "1")).rejects.toThrow("private_evidence_access_denied");
+    expect(f.fetcher).toHaveBeenCalledTimes(10);
+  });
+  it.each([{ ...info, stacks_tip: "bad" }, { ...info, network_id: 1 }, { ...info, is_fully_synced: false }, { ...info, stacks_tip_height: 0 }])("does not retry invalid final node metadata %#", async final => {
+    const f = fixture({ 4: final });
+    await expect(f.read(contract, "1")).rejects.toThrow("private_evidence_access_denied");
+    expect(f.fetcher).toHaveBeenCalledTimes(5);
+  });
+  it("shares the five-second deadline across both attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = movingFixture(false, true);
+      const pending = expect(f.read(contract, "1")).rejects.toThrow("private_evidence_access_denied");
+      await vi.advanceTimersByTimeAsync(5001); await pending;
+      expect(f.fetcher).toHaveBeenCalledTimes(6);
+      expect(f.fetcher.mock.calls[5]![1]?.signal?.aborted).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
   it("pins both reads to canonical index hash and serializes job ID, never broadcasts", async () => {
     const f = fixture(); expect(await f.read(contract, "1")).toEqual({ network: "testnet", contract, jobId: "1", client, provider, evaluator, status: 1, escrow: 1000n });
     for (const i of [2,3]) {

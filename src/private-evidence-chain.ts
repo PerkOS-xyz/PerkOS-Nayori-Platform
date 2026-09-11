@@ -3,6 +3,7 @@ import { ClarityType, cvToString, deserializeCV, serializeCV, uintCV, validateSt
 import { PrivateEvidenceDenied, type PrivateEvidenceJob } from "./private-evidence-security.js";
 
 const denied = () => new PrivateEvidenceDenied();
+class SnapshotMoved extends Error {}
 const hex = /^(?:0x)?[0-9a-f]{64}$/;
 const uint = (v: ClarityValue | undefined): bigint => {
   if (v?.type !== ClarityType.UInt) throw denied();
@@ -84,13 +85,23 @@ export function createPrivateEvidenceChain(options: {
       if (!provider || ![ClarityType.OptionalNone, ClarityType.OptionalSome].includes(provider.type)) throw denied();
       const assigned = provider.type === ClarityType.OptionalSome ? principal(provider.value, network) : null;
       const current = await request("/v2/info");
-      // A moving tip retries on the next request rather than mixing authorization snapshots.
-      if (current.network_id !== info.network_id || current.stacks_tip !== tip || current.is_fully_synced !== true || controller.signal.aborted) throw denied();
+      if (current.network_id !== info.network_id || current.is_fully_synced !== true || controller.signal.aborted ||
+          typeof current.stacks_tip !== "string" || !hex.test(current.stacks_tip) ||
+          !Number.isSafeInteger(current.stacks_tip_height) || Number(current.stacks_tip_height) < 1) throw denied();
+      // Discard the entire snapshot; never authorize using an earlier attempt's data.
+      if (current.stacks_tip !== tip) throw new SnapshotMoved();
       return { network, contract, jobId, client: principal(job.value.client, network), provider: assigned,
         evaluator: principal(job.value.evaluator, network), status: Number(status), escrow: uint(escrow) };
     };
     try {
-      return await Promise.race([work(), new Promise<never>((_resolve, reject) => {
+      const boundedRead = async () => {
+        try { return await work(); }
+        catch (error) {
+          if (!(error instanceof SnapshotMoved) || controller.signal.aborted) throw error;
+          return await work(); // One fresh snapshot, sharing the original five-second budget.
+        }
+      };
+      return await Promise.race([boundedRead(), new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(denied()); }, 5000);
       })]);
     } catch { throw denied(); } finally { clearTimeout(timer); controller.abort(); }
