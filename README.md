@@ -5,6 +5,31 @@ Commerce Agent by PerkOS.
 
 ## Current status
 
+New candidate: [direct S3 private evidence](docs/S3_PRIVATE_EVIDENCE.md). Nayori authorizes a
+short-lived direct upload, verifies S3 checksum/size/version, and stores metadata only in PostgreSQL.
+Downloads are authorized per job and pinned to the verified S3 version. A restricted QA service
+identity passes22real AWS checks. The server now supports explicit QA-only opt-in, owner-only
+credential files,30day access retention and a separate exact-version cleanup CLI. **Private endpoints
+are enabled for controlled internal QA testing only**. QA deployment and migrations are complete; separate scheduled cleanup
+and metadata backups are operating. Synthetic metadata restoration verified the pinned S3 version,
+exact bytes and expiry enforcement. QA operational email alerts now use Resend with a dedicated
+sending-only key, persistent duplicate suppression and a delivered VPS integration test.
+SDK/MCP/evaluator integration, independent outage/cost monitoring and bucket-loss recovery remain.
+
+QA source work: [private evidence security foundation](docs/PRIVATE_EVIDENCE.md) adds strict wallet
+authentication, per-job role checks, authenticated encryption and an inactive PostgreSQL storage
+adapter with atomic quotas, a fail-closed issuer identity client and an **unmounted private HTTP
+factory** for authenticated uploads/downloads, a network/tip-pinned chain reader and explicit
+PostgreSQL runtime assembly, operator file keyring and bounded rotation/expired-row maintenance.
+The older PostgreSQL byte-storage backend remains unmounted; direct S3 is the QA path.
+MCP and evaluator privacy integration still require their gates. See
+[private-evidence retry guidance](docs/S3_PRIVATE_EVIDENCE.md#temporary-issuer-saturation-and-retries)
+for temporary issuer backpressure; no production-readiness claim is made.
+
+A disposable PostgreSQL backup/restore rehearsal has passed, including13recovery checks for key
+availability, expiry, revocation, rotation and corruption. This does not activate uploads or establish
+operational backup/key custody; see the [private evidence recovery status](docs/PRIVATE_EVIDENCE.md).
+
 This repository implements the **multi-protocol paid-resource, external-OAuth and network-pinned settlement boundary**. It
 validates wallet-linked OAuth tokens issued by `oauth.nayori.ai`, retains backward-compatible
 merchant API keys, and provides a scoped MCP endpoint, request-bound quotes, the pinned SDK
