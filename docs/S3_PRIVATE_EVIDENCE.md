@@ -49,6 +49,12 @@ attempt repeats authorization. Do not blindly retry prepare: a failed final chec
 may have left a reserved row. Reconcile pending reservations before another prepare.
 No automatic SDK retry policy or increased throughput is delivered by this change.
 
+Two consecutive Stacks tip changes during one bounded authorization read are also
+reported as the same generic503, with `Retry-After: 1`. The first snapshot is
+discarded completely; no stale job, escrow or role data is accepted. A retry
+performs authentication and chain authorization again. Other chain failures
+remain permission-safe and do not disclose node details.
+
 ## Security and operational limits
 
 - Signed POST/GET capabilities can be shared/replayed until expiry; they are **not single-use**.

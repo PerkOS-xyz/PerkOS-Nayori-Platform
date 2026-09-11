@@ -4,6 +4,7 @@ import { validateStacksAddress } from "@stacks/transactions";
 import { jwtVerify, type JWTVerifyGetKey } from "jose";
 import { z } from "zod";
 import { EvidenceIssuerBusy } from "./evidence-issuer-busy.js";
+import { EvidenceChainBusy } from "./evidence-chain-busy.js";
 
 const networkSchema = z.enum(["testnet", "mainnet"]);
 const uint = z.string().regex(/^[1-9][0-9]{0,38}$/).refine(n => BigInt(n) < 2n ** 128n);
@@ -105,7 +106,10 @@ export async function authorizeEvidence(input: {
     if (actor === job.provider) return "provider";
     requireSafe(actor === job.evaluator && [2, 7, 8].includes(job.status) && job.escrow > 0n);
     return "evaluator";
-  } catch { throw new PrivateEvidenceDenied(); }
+  } catch (error) {
+    if (error instanceof EvidenceChainBusy) throw error;
+    throw new PrivateEvidenceDenied();
+  }
 }
 
 const envelopeSchema = z.object({ version: z.literal(1), keyId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),

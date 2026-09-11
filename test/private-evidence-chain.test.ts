@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { noneCV, someCV, standardPrincipalCV, tupleCV, uintCV, responseOkCV, serializeCV } from "@stacks/transactions";
 import { createPrivateEvidenceChain } from "../src/private-evidence-chain.js";
+import type { EvidenceChainBusy } from "../src/evidence-chain-busy.js";
 const client = "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5", provider = "ST3QBWTA0XSA94YDXT13QFH3ZMSZSM1V4Z645YHT9";
 const evaluator = "STBTXHXFXFGMNPXST7A6XQ1WNGC0V6TB6CDDQZB4", contract = `${client}.sbtc-commerce-v5`;
 const info = { network_id: 2147483648, is_fully_synced: true, stacks_tip: "a".repeat(64), stacks_tip_height: 100 };
@@ -36,7 +37,9 @@ describe("bounded private-evidence chain adapter", () => {
   });
   it("fails closed after a second tip movement without a third attempt", async () => {
     const f = movingFixture(true);
-    await expect(f.read(contract, "1")).rejects.toThrow("private_evidence_access_denied");
+    await expect(f.read(contract, "1")).rejects.toMatchObject({
+      name: "Error", message: "private_evidence_temporarily_unavailable", retryAfterSeconds: 1,
+    } satisfies Partial<EvidenceChainBusy>);
     expect(f.fetcher).toHaveBeenCalledTimes(10);
   });
   it.each([{ ...info, stacks_tip: "bad" }, { ...info, network_id: 1 }, { ...info, is_fully_synced: false }, { ...info, stacks_tip_height: 0 }])("does not retry invalid final node metadata %#", async final => {

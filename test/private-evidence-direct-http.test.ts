@@ -2,6 +2,7 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it, vi } from "vitest";
 import { createDirectEvidenceHttp } from "../src/private-evidence-direct-http.js";
 import { createDirectEvidenceService, type DirectEvidenceRecord } from "../src/private-evidence-direct.js";
+import { EvidenceChainBusy } from "../src/evidence-chain-busy.js";
 
 const consumer = "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5";
 const provider = "ST3QBWTA0XSA94YDXT13QFH3ZMSZSM1V4Z645YHT9";
@@ -22,13 +23,14 @@ async function fixture(wallet = provider) {
     objects: { upload, verify: async key => ({ key, versionId: "v1", checksum: Buffer.from(context.sha256, "hex").toString("base64"), size: 5, mediaType: "text/plain" }),
       download: async () => "https://fixture.s3.us-east-1.amazonaws.com/file?signature=fixture" } });
   let active = true;
+  let chainBusy = false;
   let issuerStatus = 200;
   let issuerCalls = 0;
   let busyOnCall = 0;
   const app = createDirectEvidenceHttp({ network: "testnet", allowedContracts: [context.contract], issuer, audience,
     keys: createLocalJWKSet({ keys: [{ ...pub, kid: "fixture" }] }), isMerchantActive: async () => active,
-    readJob: async () => ({ network: "testnet", contract: context.contract, jobId: "1", client: consumer,
-      provider, evaluator, status: 1, escrow: 1000n }), service,
+    readJob: async () => { if (chainBusy) throw new EvidenceChainBusy(); return ({ network: "testnet", contract: context.contract, jobId: "1", client: consumer,
+      provider, evaluator, status: 1, escrow: 1000n }); }, service,
     issuerFetcher: async (_url, init) => {
       issuerCalls++;
       if (issuerStatus !== 200 || issuerCalls === busyOnCall) return new Response("SECRET ISSUER DETAIL", {status: issuerStatus !== 200 ? issuerStatus : 429, headers:{"retry-after":"60"}});
@@ -37,9 +39,20 @@ async function fixture(wallet = provider) {
     { headers: { "content-type": "application/json" } }); } });
   const request = (op: string, body: unknown, headers: Record<string, string> = {}) => app.request(`/v1/private-evidence/${op}`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
-  return { app, request, upload, rows, revoke: () => { active = false; }, setIssuer: (status:number) => {issuerStatus=status;}, busyAt: (call:number) => {issuerCalls=0;busyOnCall=call;} };
+  return { app, request, upload, rows, revoke: () => { active = false; }, setIssuer: (status:number) => {issuerStatus=status;}, busyAt: (call:number) => {issuerCalls=0;busyOnCall=call;}, setChainBusy: (value:boolean) => {chainBusy=value;} };
 }
 describe("direct S3 HTTP with real JWT checks and fixture storage", () => {
+  it("returns retryable503 for an exhausted chain snapshot without weakening403", async () => {
+    const f=await fixture();f.setChainBusy(true);
+    const busy=await f.request("prepare",{context});
+    expect(busy.status).toBe(503);expect(busy.headers.get("retry-after")).toBe("1");
+    expect(busy.headers.get("cache-control")).toBe("no-store");
+    expect(await busy.json()).toEqual({error:"private_evidence_temporarily_unavailable"});
+    expect(f.rows.size).toBe(0);expect(f.upload).not.toHaveBeenCalled();
+    f.setChainBusy(false);f.revoke();
+    const denied=await f.request("prepare",{context});
+    expect(denied.status).toBe(403);expect(denied.headers.get("retry-after")).toBeNull();
+  });
   it("returns bounded retry guidance without exposing data; rechecks revocation on retry", async () => {
     const f=await fixture(); f.setIssuer(429);
     const r=await f.request("prepare", {context});

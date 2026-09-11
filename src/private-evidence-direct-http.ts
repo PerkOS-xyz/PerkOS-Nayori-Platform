@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { EvidenceIssuerBusy } from "./evidence-issuer-busy.js";
+import { EvidenceChainBusy } from "./evidence-chain-busy.js";
 import { z } from "zod";
 import type { JWTVerifyGetKey } from "jose";
 import { createIssuerEvidenceIdentityCheck } from "./evidence-issuer-client.js";
@@ -53,7 +54,7 @@ export function createDirectEvidenceHttp(options: {
         return c.json(await options.service[operation](id, authorize));
       } catch (error) {
         void c.req.raw.body?.cancel().catch(() => undefined);
-        if (error instanceof EvidenceIssuerBusy) {
+        if (error instanceof EvidenceIssuerBusy || error instanceof EvidenceChainBusy) {
           c.header("Retry-After", String(error.retryAfterSeconds));
           return c.json({ error: "private_evidence_temporarily_unavailable" }, 503);
         }

@@ -1,6 +1,7 @@
 import { ClarityType, cvToString, deserializeCV, serializeCV, uintCV, validateStacksAddress,
   type ClarityValue } from "@stacks/transactions";
 import { PrivateEvidenceDenied, type PrivateEvidenceJob } from "./private-evidence-security.js";
+import { EvidenceChainBusy } from "./evidence-chain-busy.js";
 
 const denied = () => new PrivateEvidenceDenied();
 class SnapshotMoved extends Error {}
@@ -104,6 +105,9 @@ export function createPrivateEvidenceChain(options: {
       return await Promise.race([boundedRead(), new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => { controller.abort(); reject(denied()); }, 5000);
       })]);
-    } catch { throw denied(); } finally { clearTimeout(timer); controller.abort(); }
+    } catch (error) {
+      if (error instanceof SnapshotMoved) throw new EvidenceChainBusy();
+      throw denied();
+    } finally { clearTimeout(timer); controller.abort(); }
   };
 }
