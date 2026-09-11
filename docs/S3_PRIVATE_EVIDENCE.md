@@ -1,4 +1,4 @@
-# Direct S3 private evidence — QA storage verified, app not enabled
+# Direct S3 private evidence — controlled QA validation
 
 Nayori authorizes; agents upload directly to a **private, versioned S3 bucket** over HTTPS.
 PostgreSQL stores only job binding, hash, size, expiry and exact S3 object/version identifiers.
@@ -7,7 +7,9 @@ production uploads. The older encrypted store remains unmounted; do not enable b
 
 Independent backup and recovery gates are tracked in
 [QA evidence backup design](QA_EVIDENCE_BACKUP_DESIGN.md). The tested policy and S3 adapter do
-not yet schedule object copies or implement transactional SQL restoration; uploads remain off.
+define the recovery requirements; the deployed QA operator is described in
+[QA backup operator](QA_BACKUP_OPERATOR.md). Private routes are enabled only for controlled
+internal QA identities. This is not a production or external-onboarding readiness claim.
 
 ## Protocol
 
@@ -26,11 +28,26 @@ All API calls require a wallet-bound OAuth token with the applicable `evidence:w
    returns a signed GET for the **stored version**, lasting at most60seconds and no later than
    retention expiry. Only completed files may be downloaded.
 
-Routes now have **explicit QA-only runtime wiring**, disabled by default and not enabled in the
-deployed app. No SDK/MCP release yet.
+Routes have **explicit QA-only runtime wiring**, disabled by default, enabled for controlled
+internal QA testing. No integrated private-evidence SDK/MCP release yet.
 Limits remain8192bytes/file, text/plain or application/json, five files/16000bytes per job,
 100000reservations/1GiB globally. Pending and expired reservations count until operator cleanup.
 Quota failure, signing/network failure and expiry fail closed, not fallback to public storage.
+
+## Temporary issuer saturation and retries
+
+A trusted OAuth issuer HTTP429 is surfaced as HTTP503 with
+`{"error":"private_evidence_temporarily_unavailable"}` and `Retry-After` in seconds
+(1–300, default60), not as a permission-denied403. Responses remain no-store and
+never include an upstream body or signed capability on failure. Invalid credentials,
+revocation and unauthorized job roles still fail closed. This behavior requires
+deployment of the backpressure-handling release; it does not raise rate limits.
+
+Clients must wait at least Retry-After, use a finite retry budget, and reauthenticate
+if their token expires. Retry complete/download using the same evidence ID; every
+attempt repeats authorization. Do not blindly retry prepare: a failed final check
+may have left a reserved row. Reconcile pending reservations before another prepare.
+No automatic SDK retry policy or increased throughput is delivered by this change.
 
 ## Security and operational limits
 

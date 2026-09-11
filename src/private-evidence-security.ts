@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { validateStacksAddress } from "@stacks/transactions";
 import { jwtVerify, type JWTVerifyGetKey } from "jose";
 import { z } from "zod";
+import { EvidenceIssuerBusy } from "./evidence-issuer-busy.js";
 
 const networkSchema = z.enum(["testnet", "mainnet"]);
 const uint = z.string().regex(/^[1-9][0-9]{0,38}$/).refine(n => BigInt(n) < 2n ** 128n);
@@ -68,7 +69,10 @@ export async function authenticateEvidence(input: {
     const identity = Object.freeze({ walletAddress: payload.wallet_address, clientId: payload.client_id, merchantId: payload.sub });
     requireSafe(await input.activeIdentity(identity));
     return identity;
-  } catch { throw new PrivateEvidenceDenied(); }
+  } catch (error) {
+    if (error instanceof EvidenceIssuerBusy) throw error;
+    throw new PrivateEvidenceDenied();
+  }
 }
 
 export interface PrivateEvidenceJob {
