@@ -168,7 +168,9 @@ docker compose -f compose.example.yaml up --build
 ```
 
 Production images are built on the PerkOS VPS from an exact merged commit. Production secrets and
-operational Compose/Caddy files remain outside GitHub.
+operational Compose/Caddy files remain outside GitHub. `GET /health` reports the running `version`
+and `release` commit; as of 2026-09-16, `https://api.nayori.ai/health` reports Platform version
+`0.7.3` at release `a29b49333692bd186492ee0f249c0b506e002b04`.
 
 ## Configuration
 
@@ -238,7 +240,8 @@ documented in the design, and `DATABASE_URL`, then run:
 npm run merchant:provision
 ```
 
-The command validates every route through SDK 0.7.1, writes only a SHA-256 credential digest and
+The command validates every route through the pinned SDK release (`0.7.1` as of 2026-09-16; see
+[SDK boundary](#sdk-boundary)), writes only a SHA-256 credential digest and
 prints the new `ny_mk_` API key once. Store that key in the merchant secret manager. Named route
 configuration fixes method, path prefix, audience, network, asset, amount, recipient and TTL on
 the server, so the quote request cannot redirect funds or change price.
@@ -299,10 +302,14 @@ The schema and quote issuer support STX, sBTC and USDCx profiles without enablin
 ## SDK boundary
 
 Transaction parsing and economic verification belong in the public
-[`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins exact
-release `0.7.1`; it does not copy the SDK implementation.
+[`@perkos/agent-sdk`](https://www.npmjs.com/package/@perkos/agent-sdk). The platform pins an exact
+release in `package.json` and `package-lock.json`; it does not copy the SDK implementation. As of
+2026-09-16 the pinned release is `0.7.1`, while the public npm `latest` tag is `0.9.0` (published
+2026-09-13, with mainnet defaults `agentic-commerce-v6` and `sbtc-commerce-v5`). Platform has not
+adopted 0.9.0 yet; moving the pin is a separate, reviewed change, and this README describes the
+pinned release only.
 
-SDK 0.7.1 owns quote canonicalization, asset definitions, x402 requirements, MPP PaymentAuth
+The pinned SDK owns quote canonicalization, asset definitions, x402 requirements, MPP PaymentAuth
 challenge/credential/receipt encoding, fingerprints, origin signature validation and the pure
 `stacks-signed-tx-v1` verifiers. Platform authenticates the merchant and signed quote first, then
 invokes the protocol-specific verifier, rejects sponsorship and persists only normalized evidence
