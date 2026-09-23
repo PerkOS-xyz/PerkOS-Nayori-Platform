@@ -5,7 +5,8 @@
 Promote the already tested direct-S3 evidence boundary to Stacks mainnet without opening evaluator
 admission to the public. Production uses a dedicated bucket, service credential, OAuth client and
 wallet-linked `evidence:read` grant. QA and production remain separate exact tuples. A runtime that
-mixes their network, issuer, audience, Hiro origin, contracts, bucket class or confirmation string
+mixes their network, issuer, canonical resource audience, API origin, Hiro origin, contracts,
+bucket class or confirmation string
 must fail before opening an HTTP port.
 
 The existing QA switch remains backward compatible. A new environment-neutral switch selects an

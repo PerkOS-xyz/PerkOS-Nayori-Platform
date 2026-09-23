@@ -8,9 +8,16 @@ import { createEvidenceAdmission, EVIDENCE_RETENTION_SECONDS, EVIDENCE_BACKUP_GR
 
 const env = { S3_EVIDENCE_QA_ENABLED: "true", STACKS_NETWORK: "testnet", OAUTH_ISSUER_ORIGIN: "https://oauth.qa.nayori.ai",
   OAUTH_RESOURCE_ORIGIN: "https://api.qa.nayori.ai", DATABASE_URL: "postgresql://fixture@localhost/fixture",
-  STACKS_API_URL: "https://api.testnet.hiro.so", S3_EVIDENCE_CONTRACTS: "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.sbtc-commerce-v5",
-  S3_EVIDENCE_BUCKET: "fixture-qa-bucket", S3_EVIDENCE_REGION: "us-east-1", S3_EVIDENCE_ACCOUNT_ID: "123456789012",
+  STACKS_API_URL: "https://api.testnet.hiro.so", S3_EVIDENCE_CONTRACTS: "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.agentic-commerce-v6,ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.sbtc-commerce-v5",
+  S3_EVIDENCE_BUCKET: "perkos-nayori-qa-evidence-089332276762", S3_EVIDENCE_REGION: "us-east-1", S3_EVIDENCE_ACCOUNT_ID: "089332276762",
   S3_EVIDENCE_CREDENTIALS_FILE: "/fixture/credentials.json" };
+const production = { S3_EVIDENCE_ENABLED: "true", S3_EVIDENCE_ENV: "production", STACKS_NETWORK: "mainnet",
+  OAUTH_ISSUER_ORIGIN: "https://oauth.nayori.ai", OAUTH_RESOURCE_ORIGIN: "https://nayori.ai",
+  DATABASE_URL: "postgresql://fixture@localhost/fixture", STACKS_API_URL: "https://api.hiro.so",
+  S3_EVIDENCE_CONTRACTS: "SP2K7PV5NXBNRV510S6DCA6RFMTFHAF3ZPK6ZSXPH.agentic-commerce-v6,SP2K7PV5NXBNRV510S6DCA6RFMTFHAF3ZPK6ZSXPH.sbtc-commerce-v5",
+  S3_EVIDENCE_BUCKET: "perkos-nayori-prod-evidence-089332276762", S3_EVIDENCE_REGION: "us-east-1",
+  S3_EVIDENCE_ACCOUNT_ID: "089332276762", S3_EVIDENCE_CREDENTIALS_FILE: "/fixture/credentials.json",
+  CONFIRM_MAINNET_PRIVATE_EVIDENCE: "enable-private-evidence-v6-v5-mainnet" };
 describe("QA direct evidence configuration and admission", () => {
   it("is disabled by default, requires explicit enable and accepts QA only", () => {
     expect(loadDirectEvidenceConfig({})).toBeNull(); expect(loadDirectEvidenceConfig({ S3_EVIDENCE_QA_ENABLED: "false" })).toBeNull();
@@ -22,6 +29,16 @@ describe("QA direct evidence configuration and admission", () => {
     { OAUTH_RESOURCE_ORIGIN: "https://nayori.ai" }, { STACKS_API_URL: "https://api.hiro.so" },
     { S3_EVIDENCE_QA_ENABLED: "yes" }, { S3_EVIDENCE_CREDENTIALS_FILE: "" }, { S3_EVIDENCE_ACCOUNT_ID: "" },
   ])("denies unsafe runtime config %j", change => expect(() => loadDirectEvidenceConfig({ ...env, ...change })).toThrow());
+  it("accepts only the explicit production release tuple", () => {
+    expect(loadDirectEvidenceConfig(production)).toMatchObject({ environment: "production", network: "mainnet" });
+    for (const change of [
+      { CONFIRM_MAINNET_PRIVATE_EVIDENCE: "" }, { STACKS_NETWORK: "testnet" },
+      { OAUTH_ISSUER_ORIGIN: "https://oauth.qa.nayori.ai" }, { OAUTH_RESOURCE_ORIGIN: "https://api.nayori.ai" },
+      { STACKS_API_URL: "https://api.testnet.hiro.so" }, { S3_EVIDENCE_BUCKET: "perkos-nayori-qa-evidence-089332276762" },
+      { S3_EVIDENCE_ACCOUNT_ID: "123456789012", S3_EVIDENCE_BUCKET: "perkos-nayori-prod-evidence-123456789012" },
+      { S3_EVIDENCE_CONTRACTS: "SP2K7PV5NXBNRV510S6DCA6RFMTFHAF3ZPK6ZSXPH.sbtc-commerce-v5,SP2K7PV5NXBNRV510S6DCA6RFMTFHAF3ZPK6ZSXPH.agentic-commerce-v5" },
+    ]) expect(() => loadDirectEvidenceConfig({ ...production, ...change })).toThrow();
+  });
   it("bounds preparations per wallet and resets after a minute", () => {
     let now = 0; const admit = createEvidenceAdmission(() => now);
     for (let i=0;i<10;i++) expect(admit("wallet", "prepare")).toBe(true);
