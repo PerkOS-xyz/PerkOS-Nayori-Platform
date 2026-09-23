@@ -4,8 +4,8 @@ import { loadBackupOperatorConfig } from "../src/private-evidence-backup-operato
 import { inspectBackupLedger } from "../src/private-evidence-backup-diagnostics.js";
 const env = { S3_BACKUP_QA_ENABLED: "true", S3_EVIDENCE_QA_ENABLED: "true", STACKS_NETWORK: "testnet",
   OAUTH_ISSUER_ORIGIN: "https://oauth.qa.nayori.ai", OAUTH_RESOURCE_ORIGIN: "https://api.qa.nayori.ai", DATABASE_URL: "postgresql://localhost/fixture",
-  STACKS_API_URL: "https://api.testnet.hiro.so", S3_EVIDENCE_CONTRACTS: "ST123.contract", S3_EVIDENCE_BUCKET: "perkos-nayori-qa-evidence-123456789012",
-  S3_BACKUP_BUCKET: "perkos-nayori-qa-evidence-backup-123456789012", S3_EVIDENCE_REGION: "us-east-1", S3_EVIDENCE_ACCOUNT_ID: "123456789012",
+  STACKS_API_URL: "https://api.testnet.hiro.so", S3_EVIDENCE_CONTRACTS: "ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.agentic-commerce-v6,ST16EWRC01S1SFWGBP63MW47VY8P3AYFA8VGEBGE5.sbtc-commerce-v5", S3_EVIDENCE_BUCKET: "perkos-nayori-qa-evidence-089332276762",
+  S3_BACKUP_BUCKET: "perkos-nayori-qa-evidence-backup-089332276762", S3_EVIDENCE_REGION: "us-east-1", S3_EVIDENCE_ACCOUNT_ID: "089332276762",
   S3_EVIDENCE_CREDENTIALS_FILE: "/fixture/source.json" };
 it("defaults to status and no writes, without backup credentials", () => {
   expect(loadBackupOperatorConfig(env)).toMatchObject({ mode: "status", execute: false, batch: 1 });
