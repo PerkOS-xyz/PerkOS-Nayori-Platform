@@ -3,6 +3,12 @@
 Private API and reconciliation infrastructure for [Nayori](https://nayori.ai), the Bitcoin
 Commerce Agent by PerkOS.
 
+The direct-S3 private-evidence runtime now defines separate exact QA and production tuples.
+Production remains disabled by default and requires mainnet v6/v5 contracts, the canonical
+Platform/OAuth/Hiro origins, a dedicated production bucket and an explicit activation string.
+Evaluator admission is controlled separately and is not made public by enabling this runtime. See
+[the production integration design](docs/plans/2026-09-23-production-private-evidence-evaluator-design.md).
+
 ## Current status
 
 New candidate: [direct S3 private evidence](docs/S3_PRIVATE_EVIDENCE.md). Nayori authorizes a
